@@ -16,7 +16,7 @@ Saving backs up the whole Prime database to `~/Documents/PrimeBackups` first and
 ```sh
 swift test
 ./scripts/build-app.sh                                                     # this Mac only
-SIGN_ID="Developer ID Application: Josh Cirre (NGQTUK9739)" ./scripts/build-app.sh  # for other Macs (then notarize)
+SIGN_ID="Developer ID Application: Your Name (TEAMID)" ./scripts/build-app.sh  # for other Macs (then notarize)
 ```
 
 `PRIME_TEST_DB=/path/to/copy.sqlite swift test` also tests saving against a copy of a real Prime database.
