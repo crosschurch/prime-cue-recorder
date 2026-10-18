@@ -51,11 +51,57 @@ public final class ProPresenterClient: @unchecked Sendable {
         return PPPresentation(uuid: uuid, name: id["name"] as? String ?? "", slides: slides)
     }
 
+    /// Every playlist, with folders flattened.
+    public func playlists() async throws -> [PPPlaylist] {
+        func flatten(_ nodes: [[String: Any]]) -> [PPPlaylist] {
+            nodes.flatMap { node -> [PPPlaylist] in
+                let id = node["id"] as? [String: Any] ?? [:]
+                if let children = node["children"] as? [[String: Any]], !children.isEmpty {
+                    return flatten(children)
+                }
+                guard (node["field_type"] as? String ?? "playlist") == "playlist",
+                      let uuid = id["uuid"] as? String else { return [] }
+                return [PPPlaylist(id: uuid, name: id["name"] as? String ?? "")]
+            }
+        }
+        return flatten(try await getAny("v1/playlists") as? [[String: Any]] ?? [])
+    }
+
+    /// The playlist in use right now: the one live content came from, else the one selected.
+    public func currentPlaylistId() async -> String? {
+        func uuid(_ json: [String: Any]?, _ keys: [String]) -> String? {
+            var node: Any? = json
+            for key in keys { node = (node as? [String: Any])?[key] }
+            return node as? String
+        }
+        if let active = try? await get("v1/playlist/active"),
+           let id = uuid(active, ["presentation", "playlist", "uuid"]) { return id }
+        if let focused = try? await get("v1/playlist/focused") {
+            return uuid(focused, ["playlist", "uuid"]) ?? uuid(focused, ["uuid"])
+        }
+        return nil
+    }
+
+    public func playlistItems(id: String) async throws -> [PPPlaylistItem] {
+        let items = try await get("v1/playlist/\(id)")["items"] as? [[String: Any]] ?? []
+        return items.enumerated().compactMap { offset, item in
+            let id = item["id"] as? [String: Any] ?? [:]
+            let info = item["presentation_info"] as? [String: Any]
+            return PPPlaylistItem(id: id["uuid"] as? String ?? UUID().uuidString, name: id["name"] as? String ?? "",
+                                  index: id["index"] as? Int ?? offset, type: item["type"] as? String ?? "",
+                                  presentationId: info?["presentation_uuid"] as? String)
+        }
+    }
+
     private func get(_ path: String) async throws -> [String: Any] {
+        try await getAny(path) as? [String: Any] ?? [:]
+    }
+
+    private func getAny(_ path: String) async throws -> Any {
         let (data, response) = try await session.data(from: base.appendingPathComponent(path))
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
-        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        return try JSONSerialization.jsonObject(with: data)
     }
 }

@@ -46,8 +46,9 @@ public struct CuePlan: Sendable {
 /// Prime knows where every section starts but nothing about when we clicked.
 /// Each click that enters a new ProPresenter group ("Verse 1", "Chorus") is
 /// paired with the matching Prime section start, and a straight line through
-/// those pairs maps click time to song beat. The operator's own lead is
-/// absorbed by that line, so `lead` is applied back on top for lyric slides.
+/// those pairs maps click time to song beat, so section-change clicks land on
+/// their section starts. Every cue then fires `leadSeconds` earlier, which
+/// covers the delay between Prime sending MIDI and ProPresenter changing slides.
 public enum CueEngine {
     static let families = ["prechorus", "chorus", "verse", "bridge", "tag", "intro", "outro",
                            "interlude", "instrumental", "refrain", "turn", "end", "break", "solo"]
@@ -60,7 +61,7 @@ public enum CueEngine {
     }
 
     public static func plan(clicks raw: [SlideClick], arrangement all: [PrimeSection],
-                            tempo: Double, lead: Double) -> CuePlan {
+                            tempo: Double, leadSeconds: Double) -> CuePlan {
         var plan = CuePlan()
         let arrangement = all.filter { $0.beats > 0 }
         guard !arrangement.isEmpty else {
@@ -126,8 +127,7 @@ public enum CueEngine {
         var repeated: [String] = []
         var early = 0
         for c in clicks {
-            let isBlank = c.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            var beat = intercept + slope * c.time - (isBlank ? 0 : lead)
+            var beat = intercept + slope * (c.time - leadSeconds)
             if beat < 0 { early += 1 }
             beat = min(max((beat * 4).rounded() / 4, 0), total - 0.01)
             let i = starts.lastIndex { $0 <= beat } ?? 0

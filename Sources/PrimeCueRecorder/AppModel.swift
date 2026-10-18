@@ -4,47 +4,108 @@ import Observation
 
 @MainActor @Observable
 final class AppModel {
-    enum Phase: Equatable { case ready, recording, review, waitingForPrime, done(String) }
+    enum Phase: Equatable { case ready, recording, review }
     enum Connection: Equatable { case unknown, checking, connected(String), failed(String) }
+    enum SaveState: Equatable { case idle, waitingForPrime, saved(String) }
+
+    /// What the weekly setup will do to a song's playlist-item cue.
+    enum PlaylistStatus: Equatable {
+        case noItem             // nothing matched in the ProPresenter playlist
+        case correct(Int)
+        case willSet(Int)
+        case custom([Int])      // several playlist cues (a medley); left alone
+    }
 
     var phase = Phase.ready
     var connection = Connection.unknown
+    var saveState = SaveState.idle
     var error: String?
 
-    var ppHost: String { didSet { UserDefaults.standard.set(ppHost, forKey: "ppHost") } }
-    var ppPort: String { didSet { UserDefaults.standard.set(ppPort, forKey: "ppPort") } }
-    var lead: Double { didSet { UserDefaults.standard.set(lead, forKey: "lead") } }
+    // Settings
+    var ppHost: String { didSet { defaults.set(ppHost, forKey: "ppHost") } }
+    var ppPort: String { didSet { defaults.set(ppPort, forKey: "ppPort") } }
+    var leadSeconds: Double { didSet { defaults.set(leadSeconds, forKey: "leadSeconds") } }
+    var notes: CueNotes {
+        didSet {
+            defaults.set(try? JSONEncoder().encode(notes), forKey: "notes")
+            if notes != oldValue { loadSongs() }
+        }
+    }
+    var countHeaders: Bool { didSet { defaults.set(countHeaders, forKey: "countHeaders"); rematch() } }
 
+    // Prime
     var setlists: [Setlist] = []
     var songs: [SetlistSong] = []
     var setlistId: String? { didSet { if setlistId != oldValue { loadSongs() } } }
     var versionId: String? { didSet { if versionId != oldValue { loadSong() } } }
     var song: PrimeSong?
 
+    // ProPresenter playlist
+    var playlists: [PPPlaylist] = []
+    var playlistId: String? { didSet { if playlistId != oldValue { Task { await loadPlaylistItems() } } } }
+    var playlistItems: [PPPlaylistItem] = []
+    /// Prime version id -> playlist item number. Starts from title matching; editable per song.
+    var itemNumbers: [String: Int] = [:]
+    /// Songs the user chose to leave without a playlist cue this week.
+    var skipPlaylistCue: Set<String> = []
+
+    // Recording
     var clicks: [SlideClick] = []
     var presentationName: String?
     private(set) var otherPresentationClicks = 0
     var recordingStartedAt: Date?
+    /// Recorded lyric cues waiting to be saved, by Prime version id.
+    var pendingLyrics: [String: CuePlan] = [:]
 
+    private let defaults = UserDefaults.standard
     private var db: PrimeDB?
     private var recordTask: Task<Void, Never>?
     private var waitTask: Task<Void, Never>?
 
     init() {
-        let defaults = UserDefaults.standard
         ppHost = defaults.string(forKey: "ppHost") ?? "127.0.0.1"
         ppPort = defaults.string(forKey: "ppPort") ?? ""
-        lead = defaults.object(forKey: "lead") as? Double ?? 2
+        leadSeconds = defaults.object(forKey: "leadSeconds") as? Double ?? 0.5
+        notes = (defaults.data(forKey: "notes")).flatMap { try? JSONDecoder().decode(CueNotes.self, from: $0) } ?? CueNotes()
+        countHeaders = defaults.object(forKey: "countHeaders") as? Bool ?? true
         #if DEBUG
         if let demo = ProcessInfo.processInfo.environment["PCR_DEMO"] { loadDemo(demo); return }
         #endif
         loadLibrary()
-        if !ppPort.isEmpty { Task { await checkConnection() } }
+        if !ppPort.isEmpty { Task { await connect() } }
     }
 
     var plan: CuePlan? {
         guard let song, !clicks.isEmpty else { return nil }
-        return CueEngine.plan(clicks: clicks, arrangement: song.arrangement, tempo: song.tempo, lead: lead)
+        return CueEngine.plan(clicks: clicks, arrangement: song.arrangement, tempo: song.tempo, leadSeconds: leadSeconds)
+    }
+
+    // MARK: Week overview
+
+    func playlistStatus(_ song: SetlistSong) -> PlaylistStatus {
+        if song.playlistCues.count > 1 { return .custom(song.playlistCues) }
+        guard !skipPlaylistCue.contains(song.id), let n = itemNumbers[song.id] else { return .noItem }
+        return song.playlistCues == [n] ? .correct(n) : .willSet(n)
+    }
+
+    func item(number: Int) -> PPPlaylistItem? {
+        playlistItems.first { itemNumber($0) == number }
+    }
+
+    func itemNumber(_ item: PPPlaylistItem) -> Int {
+        countHeaders ? item.number : playlistItems.filter { $0.type != "header" && $0.index <= item.index }.count
+    }
+
+    var playlistChanges: [SetlistSong] {
+        songs.filter { if case .willSet = playlistStatus($0) { true } else { false } }
+    }
+
+    var changeCount: Int { playlistChanges.count + pendingLyrics.count }
+
+    var nextSongNeedingLyrics: SetlistSong? {
+        let order = songs.filter { $0.hasSections && $0.lyricCues == 0 && pendingLyrics[$0.id] == nil }
+        let current = songs.firstIndex { $0.id == versionId } ?? -1
+        return order.first { s in (songs.firstIndex { $0.id == s.id } ?? 0) > current } ?? order.first
     }
 
     // MARK: Prime library
@@ -55,7 +116,11 @@ final class AppModel {
             try db.checkSchema()
             self.db = db
             setlists = try db.setlists()
-            setlistId = setlists.first?.id
+            if setlistId == nil || !setlists.contains(where: { $0.id == setlistId }) {
+                setlistId = setlists.first?.id
+            } else {
+                loadSongs()
+            }
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -65,8 +130,11 @@ final class AppModel {
     private func loadSongs() {
         guard let db, let setlistId else { songs = []; return }
         do {
-            songs = try db.songs(setlistId: setlistId)
-            versionId = (songs.first(where: \.isActive) ?? songs.first)?.id
+            let selected = versionId
+            songs = try db.songs(setlistId: setlistId, notes: notes)
+            rematch()
+            versionId = songs.contains { $0.id == selected } ? selected
+                : (songs.first { $0.hasSections && $0.lyricCues == 0 } ?? songs.first)?.id
         } catch { self.error = error.localizedDescription }
     }
 
@@ -81,13 +149,38 @@ final class AppModel {
         Int(ppPort).flatMap { ProPresenterClient(host: ppHost, port: $0) }
     }
 
-    func checkConnection() async {
+    func connect() async {
         guard let client else { connection = .failed("Enter ProPresenter's network port."); return }
         connection = .checking
-        do { connection = .connected(try await client.version()) } catch {
+        do {
+            connection = .connected(try await client.version())
+            playlists = (try? await client.playlists()) ?? []
+            let current = await client.currentPlaylistId()
+            if let current, playlists.contains(where: { $0.id == current }) {
+                playlistId = current
+            } else if playlistId == nil {
+                playlistId = playlists.first?.id
+            }
+            await loadPlaylistItems()
+        } catch {
             connection = .failed("Can't reach ProPresenter at \(ppHost):\(ppPort). "
                                  + "Is Network turned on in ProPresenter's settings?")
         }
+    }
+
+    func loadPlaylistItems() async {
+        guard let client, let playlistId else { return }
+        do {
+            playlistItems = try await client.playlistItems(id: playlistId)
+            rematch()
+        } catch {
+            self.error = "Couldn't read that playlist from ProPresenter."
+        }
+    }
+
+    private func rematch() {
+        itemNumbers = WeekSetup.match(songs: songs, items: playlistItems).mapValues { itemNumber($0) }
+        skipPlaylistCue = []
     }
 
     // MARK: Recording
@@ -98,6 +191,7 @@ final class AppModel {
         presentationName = nil
         otherPresentationClicks = 0
         error = nil
+        saveState = .idle
         phase = .recording
         recordingStartedAt = Date()
         let start = ContinuousClock.now
@@ -157,11 +251,25 @@ final class AppModel {
         phase = .ready
     }
 
+    /// Keeps the reviewed cues for the next save and moves on to the next song without lyrics.
+    func keep() {
+        guard let song, let plan else { return }
+        pendingLyrics[song.versionId] = plan
+        clicks = []
+        phase = .ready
+        if let next = nextSongNeedingLyrics { versionId = next.id }
+    }
+
+    func forget(_ versionId: String) {
+        pendingLyrics[versionId] = nil
+    }
+
     // MARK: Saving
 
     func save() {
+        guard changeCount > 0 else { return }
         if PrimeDB.primeIsRunning {
-            phase = .waitingForPrime
+            saveState = .waitingForPrime
             waitTask = Task {
                 while PrimeDB.primeIsRunning && !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(500))
@@ -175,7 +283,7 @@ final class AppModel {
 
     func cancelSave() {
         waitTask?.cancel()
-        phase = .review
+        saveState = .idle
     }
 
     func quitPrime() {
@@ -188,18 +296,33 @@ final class AppModel {
     }
 
     private func write() {
-        guard let db, let song, let plan else { phase = .review; return }
+        guard let db else { saveState = .idle; return }
         do {
-            try db.writeLyricCues(versionId: song.versionId, cues: plan.cues)
-            phase = .done("Saved \(plan.cues.count) cues to “\(song.name)”. Open Prime, play it through to check, "
-                          + "then save the song to the cloud.")
-            clicks = []
-            let selected = versionId
+            var writes: [CueWrite] = []
+            for s in playlistChanges {
+                guard case .willSet(let n) = playlistStatus(s) else { continue }
+                let pos = WeekSetup.playlistCuePosition(arrangement: try db.song(versionId: s.id).arrangement)
+                writes.append(CueWrite(versionId: s.id, note: notes.playlist, channel: notes.channel,
+                                       cues: [(n, pos.sectionId, pos.progress)]))
+            }
+            for (id, plan) in pendingLyrics {
+                writes.append(CueWrite(versionId: id, note: notes.lyric, channel: notes.channel,
+                                       cues: plan.cues.sorted { $0.slide < $1.slide }
+                                           .map { ($0.slide, $0.sectionId, $0.progress) }))
+            }
+            try db.write(writes, lyricNote: notes.lyric)
+            let playlistCount = playlistChanges.count
+            let lyricSongs = pendingLyrics.count
+            pendingLyrics = [:]
             loadSongs()
-            versionId = selected
+            var parts: [String] = []
+            if playlistCount > 0 { parts.append("\(playlistCount) playlist cue\(playlistCount == 1 ? "" : "s")") }
+            if lyricSongs > 0 { parts.append("lyrics for \(lyricSongs) song\(lyricSongs == 1 ? "" : "s")") }
+            saveState = .saved("Saved " + parts.joined(separator: " and ")
+                               + ". Open Prime, check the songs, then save them to the cloud.")
         } catch {
             self.error = error.localizedDescription
-            phase = .review
+            saveState = .idle
         }
     }
 }

@@ -23,35 +23,34 @@ struct ContentView: View {
     @State private var showSetup = false
 
     var body: some View {
-        Group {
-            switch model.phase {
-            case .ready: ReadyView(model: model)
-            case .recording: RecordingView(model: model)
-            case .review: ReviewView(model: model)
-            case .waitingForPrime: WaitingView(model: model)
-            case .done(let message): DoneView(model: model, message: message)
-            }
+        NavigationSplitView {
+            WeekSidebar(model: model)
+                .navigationSplitViewColumnWidth(min: 250, ideal: 290, max: 360)
+        } detail: {
+            SongDetail(model: model)
+                .safeAreaInset(edge: .top) {
+                    if let error = model.error {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .glassCard(tint: .red, shape: Capsule())
+                            .padding(.top, 8)
+                            .onTapGesture { model.error = nil }
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
         }
-        .frame(minWidth: 680, minHeight: 560)
-        .safeAreaInset(edge: .top) {
-            if let error = model.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .glassCard(tint: .red, shape: Capsule())
-                    .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .navigationTitle(model.song?.name ?? "Prime Cue Recorder")
-        .navigationSubtitle(model.setlists.first { $0.id == model.setlistId }?.name ?? "")
+        .frame(minWidth: 1020, minHeight: 640)
+        .navigationTitle("Prime Cue Recorder")
         .toolbar { toolbar }
+        .hiddenWindowTitle()
         .sheet(isPresented: $showSetup) {
             SettingsView(model: model, isFirstRun: true)
         }
-        .onAppear { if model.ppPort.isEmpty { showSetup = true } }
+        .onAppear { if model.ppPort.isEmpty && model.connection == .unknown { showSetup = true } }
         .animation(.smooth, value: model.phase)
         .animation(.smooth, value: model.error)
+        .animation(.smooth, value: model.saveState)
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
@@ -59,94 +58,351 @@ struct ContentView: View {
             ConnectionBadge(connection: model.connection)
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            Picker("Setlist", selection: $model.setlistId) {
+            Picker("Prime Setlist", selection: $model.setlistId) {
                 ForEach(model.setlists) { list in
                     Text("\(list.name) — \(list.serviceDate)").tag(Optional(list.id))
                 }
             }
-            .help("Setlist")
-            Picker("Song", selection: $model.versionId) {
-                ForEach(model.songs) { song in
-                    Text(song.name).tag(Optional(song.id))
-                }
+            .help("Prime setlist")
+            Picker("ProPresenter Playlist", selection: $model.playlistId) {
+                if model.playlists.isEmpty { Text("No ProPresenter Playlist").tag(String?.none) }
+                ForEach(model.playlists) { Text($0.name).tag(Optional($0.id)) }
             }
-            .help("Song")
-            Button("Reload", systemImage: "arrow.clockwise") { model.loadLibrary() }
-                .help("Reload setlists from Prime")
+            .help("ProPresenter playlist")
+            Button("Reload", systemImage: "arrow.clockwise") {
+                model.loadLibrary()
+                Task { await model.connect() }
+            }
+            .help("Reload from Prime and ProPresenter")
         }
         ToolbarItem(placement: .primaryAction) {
             SettingsLink { Label("Settings", systemImage: "gearshape") }
-                .help("ProPresenter settings")
+                .help("Settings")
         }
     }
 }
 
-// MARK: Ready
+// MARK: Sidebar
 
-private struct ReadyView: View {
+private struct WeekSidebar: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        VStack(spacing: 28) {
-            Spacer(minLength: 0)
-            if let song = model.song {
-                VStack(spacing: 6) {
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 44, weight: .light))
-                        .foregroundStyle(.tint)
-                        .padding(.bottom, 6)
-                    Text(song.name).font(.largeTitle.weight(.semibold))
-                    Text(details(song)).foregroundStyle(.secondary)
+        List(selection: $model.versionId) {
+            Section("This Week") {
+                ForEach(model.songs) { song in
+                    SongRow(model: model, song: song).tag(Optional(song.id))
                 }
-                RecordButton(isRecording: false) { model.startRecording() }
-                    .disabled(song.arrangement.isEmpty)
-                if song.arrangement.isEmpty {
-                    Text("This song has no sections in Prime, so it can't be timed.")
-                        .foregroundStyle(.orange)
+            }
+        }
+        .disabled(model.phase == .recording)
+        .safeAreaInset(edge: .bottom) {
+            SaveCard(model: model).padding(12)
+        }
+    }
+}
+
+private struct SongRow: View {
+    let model: AppModel
+    let song: SetlistSong
+    /// Selected rows sit on the accent color, so colored text and icons switch to plain.
+    private var plain: Bool { model.versionId == song.id }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(song.name).lineLimit(1)
+                HStack(spacing: 6) {
+                    playlistLabel
+                    Text("·")
+                    lyricsLabel
                 }
-            } else {
-                ContentUnavailableView("Choose a Song", systemImage: "music.note.list",
-                                       description: Text("Pick a setlist and song from the toolbar."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Steps()
+            statusIcon
         }
-        .padding(28)
-        .frame(maxWidth: .infinity)
+        .padding(.vertical, 3)
     }
 
-    private func details(_ song: PrimeSong) -> String {
-        let cues = model.songs.first { $0.id == song.versionId }?.lyricCues ?? 0
-        return ["\(Int(song.tempo.rounded())) BPM", "\(song.arrangement.count) sections",
-                cues > 0 ? "\(cues) lyric cues now" : "No lyric cues yet"].joined(separator: "  ·  ")
+    @ViewBuilder private var playlistLabel: some View {
+        switch model.playlistStatus(song) {
+        case .noItem: Text(song.playlistCues.first.map { "Item \($0)" } ?? "No item")
+        case .correct(let n): Text("Item \(n)")
+        case .willSet(let n): Text("Item \(n)").foregroundStyle(plain ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+        case .custom(let ns): Text("Items " + ns.map(String.init).joined(separator: ", "))
+        }
+    }
+
+    @ViewBuilder private var lyricsLabel: some View {
+        if let plan = model.pendingLyrics[song.id] {
+            Text("\(plan.cues.count) recorded").foregroundStyle(plain ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+        } else if !song.hasSections {
+            Text("No sections")
+        } else if song.lyricCues == 0 {
+            Text("Needs lyrics").foregroundStyle(plain ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+        } else {
+            Text("\(song.lyricCues) lyric cues")
+        }
+    }
+
+    @ViewBuilder private var statusIcon: some View {
+        let unsaved = model.pendingLyrics[song.id] != nil
+            || { if case .willSet = model.playlistStatus(song) { true } else { false } }()
+        if unsaved {
+            Image(systemName: "circle.fill").font(.system(size: 7))
+                .foregroundStyle(plain ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
+                .help("Changes waiting to be saved")
+        } else if song.hasSections && song.lyricCues == 0 {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(plain ? AnyShapeStyle(.primary) : AnyShapeStyle(.orange))
+                .help("No lyric cues yet")
+        } else {
+            Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct SaveCard: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch model.saveState {
+            case .waitingForPrime:
+                Text("Quit Prime to save").font(.headline)
+                Text("Prime has to be closed while saving, or it will overwrite the cues.")
+                    .font(.callout).foregroundStyle(.secondary)
+                GlassGroup {
+                    HStack {
+                        Button("Cancel") { model.cancelSave() }.glassButton()
+                        Spacer()
+                        Button("Quit Prime") { model.quitPrime() }.glassProminentButton()
+                    }
+                }
+            case .saved(let message):
+                Label("Saved", systemImage: "checkmark.circle.fill").font(.headline)
+                    .foregroundStyle(.green)
+                Text(message).font(.callout).foregroundStyle(.secondary)
+                GlassGroup {
+                    HStack {
+                        Button("Done") { model.saveState = .idle }.glassButton()
+                        Spacer()
+                        Button("Open Prime") { model.openPrime() }.glassProminentButton()
+                    }
+                }
+            case .idle:
+                Text(summary).font(.callout).foregroundStyle(.secondary)
+                Button {
+                    model.save()
+                } label: {
+                    Text(model.changeCount == 0 ? "Nothing to Save" : "Save \(model.changeCount) to Prime")
+                        .frame(maxWidth: .infinity)
+                }
+                .glassProminentButton()
+                .controlSize(.large)
+                .disabled(model.changeCount == 0 || model.phase == .recording)
+            }
+        }
+        .padding(14)
+        .glassCard(shape: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var summary: String {
+        let playlist = model.playlistChanges.count
+        let lyrics = model.pendingLyrics.count
+        let missing = model.songs.filter { $0.hasSections && $0.lyricCues == 0 && model.pendingLyrics[$0.id] == nil }.count
+        var parts: [String] = []
+        if playlist > 0 { parts.append("\(playlist) playlist cue\(playlist == 1 ? "" : "s") to set") }
+        if lyrics > 0 { parts.append("\(lyrics) song\(lyrics == 1 ? "" : "s") recorded") }
+        if missing > 0 { parts.append("\(missing) still need\(missing == 1 ? "s" : "") lyrics") }
+        return parts.isEmpty ? "Everything this week has cues." : parts.joined(separator: " · ")
+    }
+}
+
+// MARK: Song detail
+
+private struct SongDetail: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        if let song = model.song, let entry = model.songs.first(where: { $0.id == song.versionId }) {
+            switch model.phase {
+            case .ready: ReadyView(model: model, song: song, entry: entry)
+            case .recording: RecordingView(model: model)
+            case .review: ReviewView(model: model)
+            }
+        } else {
+            ContentUnavailableView("Choose a Song", systemImage: "music.note.list",
+                                   description: Text("Pick a song from this week's setlist."))
+        }
+    }
+}
+
+private struct ReadyView: View {
+    @Bindable var model: AppModel
+    let song: PrimeSong
+    let entry: SetlistSong
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                VStack(spacing: 6) {
+                    Text(song.name).font(.largeTitle.weight(.semibold)).multilineTextAlignment(.center)
+                    Text("\(Int(song.tempo.rounded())) BPM  ·  \(song.arrangement.count) sections")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 20)
+
+                PlaylistCueCard(model: model, entry: entry)
+                LyricsCard(model: model, song: song, entry: entry)
+            }
+            .padding(28)
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+private struct PlaylistCueCard: View {
+    @Bindable var model: AppModel
+    let entry: SetlistSong
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Playlist Item", systemImage: "list.number").font(.headline)
+                Spacer()
+                status
+            }
+            Text("Note \(model.notes.playlist) selects this song's item in the ProPresenter playlist, one beat into the song.")
+                .font(.callout).foregroundStyle(.secondary)
+            if case .custom(let numbers) = model.playlistStatus(entry) {
+                Text("This song has \(numbers.count) playlist cues (items \(numbers.map(String.init).joined(separator: ", "))), "
+                     + "like a medley. They're left as they are.")
+                    .font(.callout)
+            } else {
+                Picker("ProPresenter item", selection: binding) {
+                    Text("None").tag(Int?.none)
+                    ForEach(model.playlistItems.filter { $0.type != "header" }) { item in
+                        Text("\(model.itemNumber(item)). \(item.name)").tag(Optional(model.itemNumber(item)))
+                    }
+                }
+                .disabled(model.playlistItems.isEmpty)
+                if model.playlistItems.isEmpty {
+                    Text("Connect to ProPresenter to match this song to the playlist.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(18)
+        .glassCard(shape: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var binding: Binding<Int?> {
+        Binding {
+            model.skipPlaylistCue.contains(entry.id) ? nil : model.itemNumbers[entry.id]
+        } set: { n in
+            if let n {
+                model.itemNumbers[entry.id] = n
+                model.skipPlaylistCue.remove(entry.id)
+            } else {
+                model.skipPlaylistCue.insert(entry.id)
+            }
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        switch model.playlistStatus(entry) {
+        case .correct(let n): Label("Item \(n) set", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+        case .willSet(let n):
+            Label(entry.playlistCues.isEmpty ? "Will set item \(n)" : "Will change to item \(n)",
+                  systemImage: "circle.fill").foregroundStyle(.tint)
+        case .custom: Label("Custom", systemImage: "slider.horizontal.3").foregroundStyle(.secondary)
+        case .noItem:
+            if let n = entry.playlistCues.first {
+                Label("Item \(n) set", systemImage: "checkmark.circle").foregroundStyle(.secondary)
+            } else {
+                Label("Not set", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
+private struct LyricsCard: View {
+    @Bindable var model: AppModel
+    let song: PrimeSong
+    let entry: SetlistSong
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Lyric Slides", systemImage: "text.quote").font(.headline)
+                Spacer()
+                if let plan = model.pendingLyrics[entry.id] {
+                    Label("\(plan.cues.count) recorded", systemImage: "circle.fill").foregroundStyle(.tint)
+                } else if entry.lyricCues > 0 {
+                    Label("\(entry.lyricCues) cues", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else {
+                    Label("None yet", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                }
+            }
+            if song.arrangement.isEmpty {
+                Text("This song has no sections in Prime, so lyric cues can't be timed.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(caption).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Steps()
+                HStack {
+                    if model.pendingLyrics[entry.id] != nil {
+                        Button("Discard Recording", role: .destructive) { model.forget(entry.id) }
+                            .glassButton()
+                    }
+                    Spacer()
+                    RecordButton(isRecording: false) { model.startRecording() }
+                }
+            }
+        }
+        .padding(18)
+        .glassCard(shape: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var caption: String {
+        if model.pendingLyrics[entry.id] != nil {
+            return "Recorded and waiting to be saved. Record again to replace it."
+        }
+        if entry.lyricCues > 0 {
+            return "This song already has lyric cues. Recording replaces them when you save."
+        }
+        return "Play the song in Prime from the top and click through the slides in ProPresenter. "
+            + String(format: "Cues fire %g seconds before your clicks to cover MIDI delay.", model.leadSeconds)
     }
 }
 
 private struct Steps: View {
     let steps = [
         ("record.circle", "Press Record"),
-        ("play.fill", "Play the song in Prime from the top"),
-        ("cursorarrow.click.2", "Click through the slides in ProPresenter"),
-        ("checkmark.circle", "Stop, check, and save"),
+        ("play.fill", "Play the song in Prime"),
+        ("cursorarrow.click.2", "Click the slides in ProPresenter"),
+        ("checkmark.circle", "Stop and keep"),
     ]
 
     var body: some View {
-        GlassGroup {
-            HStack(spacing: 10) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
-                    VStack(spacing: 8) {
-                        Image(systemName: step.0).font(.title2).foregroundStyle(.tint)
-                        Text("\(i + 1). \(step.1)")
-                            .font(.callout)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 84)
-                    .padding(12)
-                    .glassCard(shape: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        HStack(alignment: .top, spacing: 8) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                VStack(spacing: 6) {
+                    Image(systemName: step.0).font(.title3).foregroundStyle(.tint)
+                    Text("\(i + 1). \(step.1)")
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity)
             }
         }
+        .padding(.vertical, 4)
     }
 }
 
@@ -162,7 +418,7 @@ private struct RecordingView: View {
                     HStack(spacing: 8) {
                         Circle().fill(.red).frame(width: 10, height: 10)
                             .phaseAnimator([1.0, 0.3]) { $0.opacity($1) } animation: { _ in .easeInOut(duration: 0.8) }
-                        Text("Recording").font(.headline)
+                        Text("Recording \(model.song?.name ?? "")").font(.headline)
                         if let start = model.recordingStartedAt {
                             Text(start, style: .timer).monospacedDigit().foregroundStyle(.secondary)
                         }
@@ -173,7 +429,6 @@ private struct RecordingView: View {
                 }
                 Spacer()
                 RecordButton(isRecording: true) { model.stopRecording() }
-                    .controlSize(.regular)
             }
             .padding(18)
             .glassCard(shape: RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -223,10 +478,10 @@ private struct ReviewView: View {
                         }
                     }
                     Spacer()
-                    Stepper(value: $model.lead, in: 0...8, step: 0.5) {
-                        Text("Lyrics \(model.lead, specifier: "%g") beats early").monospacedDigit()
+                    Stepper(value: $model.leadSeconds, in: 0...2, step: 0.1) {
+                        Text(String(format: "Fire %.1fs early", model.leadSeconds)).monospacedDigit()
                     }
-                    .help("Blank slides always fire right where you clicked them.")
+                    .help("Covers the delay between Prime sending MIDI and ProPresenter changing slides.")
                 }
 
                 ForEach(plan.warnings, id: \.self) { warning in
@@ -255,7 +510,8 @@ private struct ReviewView: View {
                         }
                         .glassButton()
                         Spacer()
-                        Button("Save to Prime", systemImage: "square.and.arrow.down") { model.save() }
+                        Button(model.nextSongNeedingLyrics == nil ? "Keep" : "Keep and Go to Next Song",
+                               systemImage: "checkmark") { model.keep() }
                             .glassProminentButton()
                             .keyboardShortcut(.defaultAction)
                             .disabled(plan.cues.isEmpty)
@@ -263,55 +519,6 @@ private struct ReviewView: View {
                     .controlSize(.large)
                 }
                 .padding(.horizontal, 24).padding(.bottom, 20)
-            }
-        }
-    }
-}
-
-// MARK: Saving
-
-private struct WaitingView: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        ContentUnavailableView {
-            Label("Quit Prime to Save", systemImage: "hourglass")
-        } description: {
-            Text("Prime has to be closed while the cues are saved, or it will overwrite them. "
-                 + "They'll save as soon as Prime closes.")
-        } actions: {
-            GlassGroup {
-                HStack {
-                    Button("Cancel") { model.cancelSave() }.glassButton()
-                    Button("Quit Prime") { model.quitPrime() }.glassProminentButton()
-                }
-                .controlSize(.large)
-            }
-        }
-    }
-}
-
-private struct DoneView: View {
-    @Bindable var model: AppModel
-    let message: String
-
-    var body: some View {
-        ContentUnavailableView {
-            Label {
-                Text("Saved")
-            } icon: {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            }
-        } description: {
-            Text(message)
-        } actions: {
-            GlassGroup {
-                HStack {
-                    Button("Record Another Song") { model.discard() }.glassButton()
-                    Button("Open Prime", systemImage: "arrow.up.forward.app") { model.openPrime() }
-                        .glassProminentButton()
-                }
-                .controlSize(.large)
             }
         }
     }
@@ -326,9 +533,8 @@ private struct RecordButton: View {
     var body: some View {
         Button(action: action) {
             Label(isRecording ? "Stop" : "Record", systemImage: isRecording ? "stop.fill" : "record.circle")
-                .font(isRecording ? .body.weight(.semibold) : .title3.weight(.semibold))
-                .padding(.horizontal, isRecording ? 6 : 18)
-                .padding(.vertical, isRecording ? 2 : 8)
+                .font(.body.weight(.semibold))
+                .padding(.horizontal, 6)
         }
         .glassProminentButton()
         .tint(.red)
@@ -394,6 +600,7 @@ struct SettingsView: View {
             Section {
                 TextField("Computer", text: $model.ppHost, prompt: Text("127.0.0.1"))
                 TextField("Port", text: $model.ppPort, prompt: Text("e.g. 50001"))
+                LabeledContent("Status") { ConnectionBadge(connection: model.connection) }
             } header: {
                 Text("ProPresenter")
             } footer: {
@@ -401,12 +608,38 @@ struct SettingsView: View {
                      + "Use 127.0.0.1 when ProPresenter runs on this Mac.")
                     .foregroundStyle(.secondary)
             }
-            Section {
-                LabeledContent("Status") { ConnectionBadge(connection: model.connection) }
+            if !isFirstRun {
+                Section {
+                    Stepper(value: $model.leadSeconds, in: 0...2, step: 0.1) {
+                        LabeledContent("Fire cues early by", value: String(format: "%.1f seconds", model.leadSeconds))
+                    }
+                } header: {
+                    Text("Timing")
+                } footer: {
+                    Text("Every recorded cue fires this much before your click, to cover the delay between Prime "
+                         + "sending MIDI and ProPresenter changing slides.")
+                        .foregroundStyle(.secondary)
+                }
+                Section {
+                    noteStepper("Lyric slide note", value: $model.notes.lyric)
+                    noteStepper("Playlist item note", value: $model.notes.playlist)
+                    Stepper(value: Binding { model.notes.channel + 1 } set: { model.notes.channel = $0 - 1 },
+                            in: 1...16) {
+                        LabeledContent("Channel", value: "\(model.notes.channel + 1)")
+                    }
+                    Toggle("Count playlist headers when numbering items", isOn: $model.countHeaders)
+                    Button("Restore Defaults") { model.notes = CueNotes() }
+                } header: {
+                    Text("MIDI")
+                } footer: {
+                    Text("These must match ProPresenter's MIDI settings. The velocity is the slide number "
+                         + "or the playlist item number.")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440)
+        .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
         .toolbar {
             if isFirstRun {
@@ -415,14 +648,29 @@ struct SettingsView: View {
                 }
             }
         }
-        .onChange(of: model.ppPort) { Task { await model.checkConnection() } }
-        .onChange(of: model.ppHost) { Task { await model.checkConnection() } }
+        .task(id: model.ppHost + ":" + model.ppPort) {
+            try? await Task.sleep(for: .milliseconds(400))
+            if !Task.isCancelled { await model.connect() }
+        }
+    }
+
+    private func noteStepper(_ title: String, value: Binding<Int>) -> some View {
+        Stepper(value: value, in: 0...127) {
+            LabeledContent(title, value: "\(value.wrappedValue)")
+        }
     }
 }
 
 // MARK: Liquid Glass with a fallback for macOS 14–15
 
-private struct GlassGroup<Content: View>: View {
+extension View {
+    @ViewBuilder
+    func hiddenWindowTitle() -> some View {
+        if #available(macOS 15, *) { toolbar(removing: .title) } else { self }
+    }
+}
+
+struct GlassGroup<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -434,7 +682,7 @@ private struct GlassGroup<Content: View>: View {
     }
 }
 
-private extension View {
+extension View {
     @ViewBuilder
     func glassCard(tint: Color? = nil, shape: some Shape) -> some View {
         if #available(macOS 26, *) {

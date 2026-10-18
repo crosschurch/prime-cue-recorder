@@ -3,7 +3,7 @@ import XCTest
 
 /// Runs against a copy of a real Prime database: PRIME_TEST_DB=/path/to/copy.sqlite swift test
 final class PrimeDBTests: XCTestCase {
-    func testWriteKeepsOtherCuesAndRoundTrips() throws {
+    func testWriteReplacesOnlyLyricsBusNotes() throws {
         guard let path = ProcessInfo.processInfo.environment["PRIME_TEST_DB"] else {
             throw XCTSkip("Set PRIME_TEST_DB to a copy of a Prime database")
         }
@@ -15,13 +15,15 @@ final class PrimeDBTests: XCTestCase {
         let song = try db.song(versionId: entry.id)
         let first = try XCTUnwrap(song.arrangement.first)
 
-        let cues = [
-            PlannedCue(slide: 1, sectionId: first.id, progress: 0.25, beat: 0, sectionType: first.type, text: ""),
-            PlannedCue(slide: 2, sectionId: first.id, progress: 0.5, beat: 0, sectionType: first.type, text: "x"),
-        ]
-        try db.writeLyricCues(versionId: entry.id, cues: cues)
+        let backup = try db.write([
+            CueWrite(versionId: entry.id, note: 19, channel: 0,
+                     cues: [(1, first.id, 0.25), (2, first.id, 0.5)]),
+            CueWrite(versionId: entry.id, note: 18, channel: 0, cues: [(7, first.id, 0.1)]),
+        ])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
 
         let after = try XCTUnwrap(try db.songs(setlistId: setlist.id).first { $0.id == entry.id })
         XCTAssertEqual(after.lyricCues, 2)
+        XCTAssertEqual(after.playlistCues, [7])
     }
 }

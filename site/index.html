@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prime Cue Recorder</title>
+<meta name="description" content="A free Mac app that records your ProPresenter slide clicks while a song plays in Loop Community Prime, then saves them as lyric cues in Prime.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="Prime Cue Recorder">
+<meta property="og:description" content="Record your ProPresenter slide clicks once. Prime advances the lyrics from then on.">
+<meta property="og:image" content="https://prime.joshcirre.com/ready.png">
+<meta property="og:url" content="https://prime.joshcirre.com/">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f5f5f7;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --line: rgba(0, 0, 0, 0.08);
+    --accent: #e8333b;
+    --accent-hover: #d42a32;
+    --shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --bg-soft: #161617;
+      --text: #f5f5f7;
+      --muted: #a1a1a6;
+      --line: rgba(255, 255, 255, 0.12);
+      --accent: #ff453a;
+      --accent-hover: #ff5d54;
+      --shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+
+  header.hero { text-align: center; padding: 96px 0 56px; }
+  .eyebrow { color: var(--muted); font-size: 15px; font-weight: 500; margin: 0 0 12px; }
+  h1 {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+    font-size: clamp(40px, 7vw, 64px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+    margin: 0;
+  }
+  .lede {
+    font-size: clamp(19px, 2.4vw, 23px);
+    color: var(--muted);
+    max-width: 620px;
+    margin: 18px auto 36px;
+    line-height: 1.4;
+  }
+  .download {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 18px;
+    font-weight: 600;
+    padding: 15px 32px;
+    border-radius: 980px;
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+  .download:hover { background: var(--accent-hover); text-decoration: none; }
+  .download:active { transform: scale(0.98); }
+  .download svg { width: 18px; height: 18px; }
+  .req { color: var(--muted); font-size: 14px; margin: 14px 0 0; }
+
+  .shot { margin: 0 auto; max-width: 900px; padding: 0 0 24px; }
+  .shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+  }
+
+  section { padding: 72px 0; }
+  section + section { border-top: 1px solid var(--line); }
+  h2 {
+    font-size: clamp(28px, 4vw, 36px);
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    margin: 0 0 36px;
+    text-align: center;
+  }
+
+  .steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    counter-reset: step;
+  }
+  .steps li {
+    background: var(--bg-soft);
+    border-radius: 18px;
+    padding: 28px 24px;
+    counter-increment: step;
+  }
+  .steps li::before {
+    content: counter(step);
+    display: inline-grid;
+    place-items: center;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 16px;
+  }
+  .steps h3 { font-size: 19px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .steps p { margin: 0; color: var(--muted); font-size: 16px; }
+  .after { text-align: center; color: var(--muted); max-width: 640px; margin: 32px auto 0; }
+
+  .review { margin-top: 48px; }
+
+  .notes {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 0;
+    list-style: none;
+  }
+  .notes li {
+    padding: 18px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .notes li:last-child { border-bottom: 0; }
+  .notes strong { display: block; font-weight: 600; margin-bottom: 2px; }
+  .notes span { color: var(--muted); font-size: 16px; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 32px 0 48px;
+    color: var(--muted);
+    font-size: 13px;
+    text-align: center;
+  }
+  footer p { margin: 4px 0; }
+
+  @media (max-width: 760px) {
+    header.hero { padding: 64px 0 40px; }
+    section { padding: 56px 0; }
+    .steps { grid-template-columns: 1fr; }
+    .shot img { border-radius: 10px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero wrap">
+  <p class="eyebrow">For church production teams</p>
+  <h1>Prime Cue Recorder</h1>
+  <p class="lede">Click through your lyric slides once while the song plays in Prime. From then on, Prime advances ProPresenter for you.</p>
+  <a class="download" href="https://github.com/crosschurch/prime-cue-recorder/releases/latest/download/PrimeCueRecorder.zip">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 11 6 6 6-6"/><path d="M5 20h14"/></svg>
+    Download for Mac
+  </a>
+  <p class="req">macOS 14 or later · free</p>
+</header>
+
+<div class="wrap">
+  <figure class="shot">
+    <img src="ready.png" width="900" height="612" alt="Prime Cue Recorder ready to record the song Goodness of God, with a Record button and four short steps.">
+  </figure>
+</div>
+
+<main>
+  <section class="wrap" id="how">
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li>
+        <h3>Record while you play the song in Prime</h3>
+        <p>Pick the song and press Record, then start it in Prime from the top.</p>
+      </li>
+      <li>
+        <h3>Click through slides in ProPresenter</h3>
+        <p>Advance the lyrics the way you would on a Sunday. The app notes the beat of each click.</p>
+      </li>
+      <li>
+        <h3>Save cues to Prime</h3>
+        <p>Check the list, nudge the timing if you need to, and save. Prime sends the MIDI cues from then on.</p>
+      </li>
+    </ol>
+    <p class="after">It can also set each week's ProPresenter playlist item cues in Prime, so the right song comes up when it starts.</p>
+    <figure class="shot review">
+      <img src="review.png" width="900" height="612" alt="A list of ten recorded lyric cues, each with its slide text, section, and beat, with a Save to Prime button." loading="lazy">
+    </figure>
+  </section>
+
+  <section class="wrap" id="before">
+    <h2>Before you start</h2>
+    <ul class="notes">
+      <li>
+        <strong>Turn on Network in ProPresenter.</strong>
+        <span>In ProPresenter, go to Settings &gt; Network and check Enable Network, then enter the same port in the app. That's how it sees your slide clicks.</span>
+      </li>
+      <li>
+        <strong>Quit Prime when saving.</strong>
+        <span>Cues are written straight into Prime's library, so Prime needs to be closed for that step.</span>
+      </li>
+      <li>
+        <strong>Your library is backed up first.</strong>
+        <span>Every save copies Prime's database to Documents/PrimeBackups before changing anything. Only lyric and playlist item cues are replaced; lights and other cues are kept.</span>
+      </li>
+    </ul>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Free from Cross Church. Works on Apple silicon and Intel Macs. Signed and notarized.</p>
+    <p><a href="https://github.com/crosschurch/prime-cue-recorder">Source on GitHub</a></p>
+    <p>Not affiliated with Loop Community or Renewed Vision.</p>
+  </div>
+</footer>
+
+</body>
+</html>

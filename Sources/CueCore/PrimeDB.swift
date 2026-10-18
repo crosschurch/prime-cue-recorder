@@ -17,11 +17,36 @@ public struct SetlistSong: Identifiable, Hashable, Sendable {
     public let name: String
     public let versionName: String
     public let lyricCues: Int
+    public let playlistCues: [Int]  // velocities of the playlist-item cues, in song order
+    public let hasSections: Bool
     public let isActive: Bool
 
-    public init(id: String, name: String, versionName: String, lyricCues: Int, isActive: Bool) {
-        self.id = id; self.name = name; self.versionName = versionName
-        self.lyricCues = lyricCues; self.isActive = isActive
+    public init(id: String, name: String, versionName: String, lyricCues: Int, playlistCues: [Int] = [],
+                hasSections: Bool = true, isActive: Bool) {
+        self.id = id; self.name = name; self.versionName = versionName; self.lyricCues = lyricCues
+        self.playlistCues = playlistCues; self.hasSections = hasSections; self.isActive = isActive
+    }
+}
+
+/// Which MIDI notes the ProPresenter setup listens for. Prime stores channel 1 as 0.
+public struct CueNotes: Codable, Hashable, Sendable {
+    public var lyric = 19
+    public var playlist = 18
+    public var channel = 0
+
+    public init(lyric: Int = 19, playlist: Int = 18, channel: Int = 0) {
+        self.lyric = lyric; self.playlist = playlist; self.channel = channel
+    }
+}
+
+public struct CueWrite: Sendable {
+    public let versionId: String
+    public let note: Int
+    public let channel: Int
+    public let cues: [(velocity: Int, sectionId: String, progress: Double)]
+
+    public init(versionId: String, note: Int, channel: Int, cues: [(velocity: Int, sectionId: String, progress: Double)]) {
+        self.versionId = versionId; self.note = note; self.channel = channel; self.cues = cues
     }
 }
 
@@ -56,7 +81,7 @@ public enum PrimeError: LocalizedError {
 /// Mirrors scripts/prime.py from the prime-midi-cues skill.
 public final class PrimeDB {
     public static let bundleID = "com.loopcommunity.PRIMEMAC"
-    public static let lyricNote = 19
+    public static let bus = "lyrics"
     static let home = FileManager.default.homeDirectoryForCurrentUser
     public static let containerDocs = home.appendingPathComponent(
         "Library/Containers/\(bundleID)/Data/Documents")
@@ -114,12 +139,17 @@ public final class PrimeDB {
         }
     }
 
-    public func songs(setlistId: String) throws -> [SetlistSong] {
+    public func songs(setlistId: String, notes: CueNotes = CueNotes()) throws -> [SetlistSong] {
         try withDB(readonly: true) { db in
             try query(db, """
                 SELECT v.localId, m.name, v.name,
                        (SELECT count(*) FROM json_each(v.midiCues) j
-                        WHERE json_extract(j.value, '$.noteNumber') = \(Self.lyricNote)),
+                        WHERE json_extract(j.value, '$.bus') = '\(Self.bus)'
+                          AND json_extract(j.value, '$.noteNumber') = \(notes.lyric)),
+                       (SELECT group_concat(json_extract(j.value, '$.noteVelocity')) FROM json_each(v.midiCues) j
+                        WHERE json_extract(j.value, '$.bus') = '\(Self.bus)'
+                          AND json_extract(j.value, '$.noteNumber') = \(notes.playlist)),
+                       json_array_length(coalesce(m.sections, '[]')) > 0,
                        s.localId = l.activeMultitrackVersionId
                 FROM setlistMultitrackVersion s
                 JOIN setlist l ON l.localId = s.setlistId
@@ -128,7 +158,9 @@ public final class PrimeDB {
                 WHERE s.setlistId = ? ORDER BY s.position
                 """, [setlistId])
                 .map { SetlistSong(id: $0[0] ?? "", name: $0[1] ?? "", versionName: $0[2] ?? "",
-                                   lyricCues: Int($0[3] ?? "") ?? 0, isActive: $0[4] == "1") }
+                                   lyricCues: Int($0[3] ?? "") ?? 0,
+                                   playlistCues: ($0[4] ?? "").split(separator: ",").compactMap { Int($0) },
+                                   hasSections: $0[5] == "1", isActive: $0[6] == "1") }
         }
     }
 
@@ -151,15 +183,15 @@ public final class PrimeDB {
 
     // MARK: Writing
 
-    /// Replaces the version's lyric cues, keeping every other cue (lights, utility notes).
-    /// Backs up the whole database first and returns the backup's location.
+    /// Replaces each version's cues on that note (lyrics bus only), keeping every other cue.
+    /// Backs up the whole database first, writes everything in one transaction, and returns
+    /// the backup's location.
     @discardableResult
-    public func writeLyricCues(versionId: String, cues: [PlannedCue]) throws -> URL {
+    public func write(_ writes: [CueWrite], lyricNote: Int = CueNotes().lyric) throws -> URL {
         let isLive = url.resolvingSymlinksInPath().path.hasPrefix(Self.containerDocs.resolvingSymlinksInPath().path)
         if isLive && Self.primeIsRunning { throw PrimeError.primeRunning }
         try checkSchema()
-        let song = try song(versionId: versionId)
-        return try withDB(readonly: false) { db in
+        let backup = try withDB(readonly: false) { db in
             try FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
             let stamp = DateFormatter.backupStamp.string(from: Date())
             let backup = backupDir.appendingPathComponent("\(url.lastPathComponent)-\(stamp)-pre-record.bak")
@@ -167,42 +199,51 @@ public final class PrimeDB {
 
             try exec(db, "BEGIN IMMEDIATE")
             do {
-                let current = try query(db, "SELECT midiCues FROM multitrackVersion WHERE localId = ?", [versionId])
-                var kept = Self.jsonArray(current.first?[0] ?? nil).filter {
-                    ($0["noteNumber"] as? Int) != Self.lyricNote
-                }
-                let maxId = Int(try query(db, """
+                var nextId = 100_000 + (Int(try query(db, """
                     SELECT max(CAST(json_extract(j.value, '$.id') AS INTEGER))
                     FROM multitrackVersion v, json_each(v.midiCues) j
-                    """).first?[0] ?? "") ?? 0
-                for (i, cue) in cues.sorted(by: { $0.slide < $1.slide }).enumerated() {
-                    kept.append([
-                        "bus": "lyrics", "channel": 0, "id": String(maxId + 100_000 + i),
-                        "isMigratedToBus": true, "messageType": ["noteOn": [String: Any]()],
-                        "multitrackSectionId": cue.sectionId, "noteNumber": Self.lyricNote,
-                        "noteVelocity": cue.slide, "sectionProgress": cue.progress,
-                    ])
+                    """).first?[0] ?? "") ?? 0)
+                for w in writes {
+                    let current = try query(db, "SELECT midiCues FROM multitrackVersion WHERE localId = ?", [w.versionId])
+                    guard let row = current.first else {
+                        throw PrimeError.notFound("A song was removed from Prime before saving. Nothing was saved.")
+                    }
+                    var kept = Self.jsonArray(row[0]).filter {
+                        !(($0["noteNumber"] as? Int) == w.note && ($0["bus"] as? String) == Self.bus)
+                    }
+                    for cue in w.cues {
+                        kept.append([
+                            "bus": Self.bus, "channel": w.channel, "id": String(nextId),
+                            "isMigratedToBus": true, "messageType": ["noteOn": [String: Any]()],
+                            "multitrackSectionId": cue.sectionId, "noteNumber": w.note,
+                            "noteVelocity": cue.velocity, "sectionProgress": cue.progress,
+                        ])
+                        nextId += 1
+                    }
+                    let data = try JSONSerialization.data(withJSONObject: kept, options: [.sortedKeys, .withoutEscapingSlashes])
+                    try exec(db, "UPDATE multitrackVersion SET midiCues = ? WHERE localId = ?",
+                             [String(decoding: data, as: UTF8.self), w.versionId])
                 }
-                let data = try JSONSerialization.data(withJSONObject: kept, options: [.sortedKeys, .withoutEscapingSlashes])
-                try exec(db, "UPDATE multitrackVersion SET midiCues = ? WHERE localId = ?",
-                         [String(decoding: data, as: UTF8.self), versionId])
                 try exec(db, "COMMIT")
             } catch {
                 try? exec(db, "ROLLBACK")
                 throw error
             }
-            try? saveBaseline(song: song, cues: cues)
             return backup
         }
+        for w in writes where w.note == lyricNote {
+            if let song = try? song(versionId: w.versionId) { try? saveBaseline(song: song, cues: w.cues) }
+        }
+        return backup
     }
 
     /// Same sidecar prime.py writes, so the skill's `learn` command can diff later hand edits.
-    private func saveBaseline(song: PrimeSong, cues: [PlannedCue]) throws {
+    private func saveBaseline(song: PrimeSong, cues: [(velocity: Int, sectionId: String, progress: Double)]) throws {
         let byId = Dictionary(song.sections.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var beats: [String: Double] = [:]
         for c in cues {
             guard let s = byId[c.sectionId] else { continue }
-            beats[String(c.slide)] = ((s.startBeat + c.progress * s.beats) * 10_000).rounded() / 10_000
+            beats[String(c.velocity)] = ((s.startBeat + c.progress * s.beats) * 10_000).rounded() / 10_000
         }
         let dir = backupDir.appendingPathComponent("baselines")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
