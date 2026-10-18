@@ -1,0 +1,8 @@
+// Landing page for prime.joshcirre.com, served as static assets from site/.
+// Deploy: npx wrangler deploy
+{
+  "name": "prime-cue-recorder",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./site" },
+  "routes": [{ "pattern": "prime.joshcirre.com", "custom_domain": true }]
+}
