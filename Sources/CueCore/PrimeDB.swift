@@ -6,6 +6,10 @@ public struct Setlist: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
     public let serviceDate: String
+
+    public init(id: String, name: String, serviceDate: String) {
+        self.id = id; self.name = name; self.serviceDate = serviceDate
+    }
 }
 
 public struct SetlistSong: Identifiable, Hashable, Sendable {
@@ -14,6 +18,11 @@ public struct SetlistSong: Identifiable, Hashable, Sendable {
     public let versionName: String
     public let lyricCues: Int
     public let isActive: Bool
+
+    public init(id: String, name: String, versionName: String, lyricCues: Int, isActive: Bool) {
+        self.id = id; self.name = name; self.versionName = versionName
+        self.lyricCues = lyricCues; self.isActive = isActive
+    }
 }
 
 public struct PrimeSong: Sendable {
@@ -22,6 +31,11 @@ public struct PrimeSong: Sendable {
     public let tempo: Double
     public let sections: [PrimeSection]     // song order, Prime's beat coordinates
     public let arrangement: [PrimeSection]  // what this version actually plays
+
+    public init(versionId: String, name: String, tempo: Double, sections: [PrimeSection], arrangement: [PrimeSection]) {
+        self.versionId = versionId; self.name = name; self.tempo = tempo
+        self.sections = sections; self.arrangement = arrangement
+    }
 }
 
 public enum PrimeError: LocalizedError {

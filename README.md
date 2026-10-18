@@ -16,7 +16,11 @@ Saving backs up the whole Prime database to `~/Documents/PrimeBackups` first and
 ```sh
 swift test
 ./scripts/build-app.sh                                                     # this Mac only
-SIGN_ID="Developer ID Application: Your Name (TEAMID)" ./scripts/build-app.sh  # for other Macs (then notarize)
+SIGN_ID="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=notary ./scripts/build-app.sh  # signed + notarized zip for other Macs
 ```
+
+`NOTARY_PROFILE` is a saved notarytool login: run `xcrun notarytool store-credentials notary` once.
+
+`PCR_DEMO=review swift run` (also `ready`, `recording`, `waiting`, `done`) opens a screen with sample data, without ProPresenter or Prime.
 
 `PRIME_TEST_DB=/path/to/copy.sqlite swift test` also tests saving against a copy of a real Prime database.

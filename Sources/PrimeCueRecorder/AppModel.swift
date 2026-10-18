@@ -19,11 +19,12 @@ final class AppModel {
     var songs: [SetlistSong] = []
     var setlistId: String? { didSet { if setlistId != oldValue { loadSongs() } } }
     var versionId: String? { didSet { if versionId != oldValue { loadSong() } } }
-    private(set) var song: PrimeSong?
+    var song: PrimeSong?
 
-    private(set) var clicks: [SlideClick] = []
-    private(set) var presentationName: String?
+    var clicks: [SlideClick] = []
+    var presentationName: String?
     private(set) var otherPresentationClicks = 0
+    var recordingStartedAt: Date?
 
     private var db: PrimeDB?
     private var recordTask: Task<Void, Never>?
@@ -34,6 +35,9 @@ final class AppModel {
         ppHost = defaults.string(forKey: "ppHost") ?? "127.0.0.1"
         ppPort = defaults.string(forKey: "ppPort") ?? ""
         lead = defaults.object(forKey: "lead") as? Double ?? 2
+        #if DEBUG
+        if let demo = ProcessInfo.processInfo.environment["PCR_DEMO"] { loadDemo(demo); return }
+        #endif
         loadLibrary()
         if !ppPort.isEmpty { Task { await checkConnection() } }
     }
@@ -95,6 +99,7 @@ final class AppModel {
         otherPresentationClicks = 0
         error = nil
         phase = .recording
+        recordingStartedAt = Date()
         let start = ContinuousClock.now
         recordTask = Task {
             var last: PPSlideIndex?

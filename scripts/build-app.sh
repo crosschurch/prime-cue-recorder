@@ -2,6 +2,8 @@
 # Builds "Prime Cue Recorder.app" into ./dist.
 # Set SIGN_ID to a "Developer ID Application" identity to sign for other Macs;
 # without it the app is ad-hoc signed and only opens cleanly on this one.
+# Also set NOTARY_PROFILE (from `xcrun notarytool store-credentials`) to notarize
+# and produce dist/PrimeCueRecorder.zip, ready to attach to a GitHub release.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -40,3 +42,15 @@ else
     codesign --force --sign - "$APP"
 fi
 echo "Built $APP"
+
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+    ZIP=dist/PrimeCueRecorder.zip
+    rm -f "$ZIP"
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$APP"
+    rm "$ZIP"
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    spctl --assess --type execute --verbose "$APP"
+    echo "Notarized $ZIP"
+fi
