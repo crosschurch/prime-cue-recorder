@@ -19,7 +19,7 @@ swift test
 SIGN_ID="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=notary ./scripts/build-app.sh  # signed + notarized zip for other Macs
 ```
 
-`NOTARY_PROFILE` is a saved notarytool login: run `xcrun notarytool store-credentials notary` once.
+`NOTARY_PROFILE` is a saved notarytool login (`xcrun notarytool store-credentials notary`). An App Store Connect API key works instead: set `APPLE_API_KEY_PATH`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`.
 
 `PCR_DEMO=review swift run` (also `ready`, `recording`, `waiting`, `done`) opens a screen with sample data, without ProPresenter or Prime.
 
