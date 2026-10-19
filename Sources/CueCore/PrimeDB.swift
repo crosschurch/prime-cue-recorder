@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import SQLite3
 
@@ -19,12 +20,16 @@ public struct SetlistSong: Identifiable, Hashable, Sendable {
     public let lyricCues: Int
     public let playlistCues: [Int]  // velocities of the playlist-item cues, in song order
     public let hasSections: Bool
+    public let isMusic: Bool        // false for spoken items like "Host / Announcements" (no tempo)
     public let isActive: Bool
 
+    public var needsLyrics: Bool { isMusic && lyricCues == 0 }
+
     public init(id: String, name: String, versionName: String, lyricCues: Int, playlistCues: [Int] = [],
-                hasSections: Bool = true, isActive: Bool) {
+                hasSections: Bool = true, isMusic: Bool = true, isActive: Bool) {
         self.id = id; self.name = name; self.versionName = versionName; self.lyricCues = lyricCues
-        self.playlistCues = playlistCues; self.hasSections = hasSections; self.isActive = isActive
+        self.playlistCues = playlistCues; self.hasSections = hasSections; self.isMusic = isMusic
+        self.isActive = isActive
     }
 }
 
@@ -56,10 +61,16 @@ public struct PrimeSong: Sendable {
     public let tempo: Double
     public let sections: [PrimeSection]     // song order, Prime's beat coordinates
     public let arrangement: [PrimeSection]  // what this version actually plays
+    /// Full length in seconds. Only looked up for songs without sections, which are timed by
+    /// the clock; nil when the audio isn't downloaded.
+    public let duration: Double?
 
-    public init(versionId: String, name: String, tempo: Double, sections: [PrimeSection], arrangement: [PrimeSection]) {
+    public var hasSections: Bool { arrangement.contains { $0.beats > 0 } }
+
+    public init(versionId: String, name: String, tempo: Double, sections: [PrimeSection],
+                arrangement: [PrimeSection], duration: Double? = nil) {
         self.versionId = versionId; self.name = name; self.tempo = tempo
-        self.sections = sections; self.arrangement = arrangement
+        self.sections = sections; self.arrangement = arrangement; self.duration = duration
     }
 }
 
@@ -150,7 +161,8 @@ public final class PrimeDB {
                         WHERE json_extract(j.value, '$.bus') = '\(Self.bus)'
                           AND json_extract(j.value, '$.noteNumber') = \(notes.playlist)),
                        json_array_length(coalesce(m.sections, '[]')) > 0,
-                       s.localId = l.activeMultitrackVersionId
+                       s.localId = l.activeMultitrackVersionId,
+                       coalesce(m.tempo, 0) > 0
                 FROM setlistMultitrackVersion s
                 JOIN setlist l ON l.localId = s.setlistId
                 JOIN multitrackVersion v ON v.localId = s.editableVersionId
@@ -160,14 +172,14 @@ public final class PrimeDB {
                 .map { SetlistSong(id: $0[0] ?? "", name: $0[1] ?? "", versionName: $0[2] ?? "",
                                    lyricCues: Int($0[3] ?? "") ?? 0,
                                    playlistCues: ($0[4] ?? "").split(separator: ",").compactMap { Int($0) },
-                                   hasSections: $0[5] == "1", isActive: $0[6] == "1") }
+                                   hasSections: $0[5] == "1", isMusic: $0[7] == "1", isActive: $0[6] == "1") }
         }
     }
 
     public func song(versionId: String) throws -> PrimeSong {
         try withDB(readonly: true) { db in
             guard let row = try query(db, """
-                SELECT m.name, m.tempo, m.sections, v.arrangedSections
+                SELECT m.name, m.tempo, m.sections, v.arrangedSections, m.localId, m.duration
                 FROM multitrackVersion v JOIN multitrack m ON m.localId = v.multitrackId
                 WHERE v.localId = ?
                 """, [versionId]).first else {
@@ -176,9 +188,36 @@ public final class PrimeDB {
             let sections = Self.parseSections(row[2]).sorted { $0.startBeat < $1.startBeat }
             let byId = Dictionary(sections.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let arranged = Self.jsonArray(row[3]).compactMap { Self.string($0["sectionId"]).flatMap { byId[$0] } }
-            return PrimeSong(versionId: versionId, name: row[0] ?? "", tempo: Double(row[1] ?? "") ?? 0,
-                             sections: sections, arrangement: arranged.isEmpty ? sections : arranged)
+            let song = PrimeSong(versionId: versionId, name: row[0] ?? "", tempo: Double(row[1] ?? "") ?? 0,
+                                 sections: sections, arrangement: arranged.isEmpty ? sections : arranged)
+            guard !song.hasSections else { return song }
+            var duration = Double(row[5] ?? "").flatMap { $0 > 0 ? $0 : nil }
+            if duration == nil {
+                let tracks = try query(db, "SELECT localId FROM track WHERE multitrackId = ?", [row[4] ?? ""])
+                duration = Self.audioDuration(trackIds: tracks.compactMap { $0[0] })
+            }
+            return PrimeSong(versionId: versionId, name: song.name, tempo: song.tempo, sections: sections,
+                             arrangement: song.arrangement, duration: duration)
         }
+    }
+
+    /// The longest of a song's downloaded stems. Prime keeps them as <track localId>.m4a in a
+    /// Tracks folder a couple of oddly named folders down from Documents/PRIME.
+    static func audioDuration(trackIds: [String]) -> Double? {
+        let fm = FileManager.default
+        let root = containerDocs.appendingPathComponent("PRIME")
+        let level1 = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        let folders = level1.flatMap { (try? fm.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)) ?? [] }
+            .map { $0.appendingPathComponent("Tracks") }
+        let lengths = trackIds.compactMap { id -> Double? in
+            for folder in folders {
+                let url = folder.appendingPathComponent("\(id).m4a")
+                guard let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0 else { continue }
+                return Double(file.length) / file.fileFormat.sampleRate
+            }
+            return nil
+        }
+        return lengths.max()
     }
 
     // MARK: Writing

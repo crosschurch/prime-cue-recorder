@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4b55d6"/>
+      <stop offset="0.55" stop-color="#2a2c8a"/>
+      <stop offset="1" stop-color="#14123f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.05" r="0.75">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.12"/>
+    </linearGradient>
+    <linearGradient id="cardEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.15"/>
+    </linearGradient>
+    <linearGradient id="cue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffb14a"/>
+      <stop offset="1" stop-color="#ff6a2b"/>
+    </linearGradient>
+    <radialGradient id="rec" cx="0.38" cy="0.32" r="0.75">
+      <stop offset="0" stop-color="#ff8a80"/>
+      <stop offset="1" stop-color="#e5251c"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
+  </g>
+  <rect x="101" y="101" width="822" height="822" rx="184" fill="none" stroke="#fff" stroke-opacity="0.18" stroke-width="2"/>
+
+  <!-- waveform timeline -->
+  <g fill="#ffffff" fill-opacity="0.55">
+    <rect x="210" y="722" width="18" height="40" rx="9"/>
+    <rect x="244" y="702" width="18" height="80" rx="9"/>
+    <rect x="278" y="680" width="18" height="124" rx="9"/>
+    <rect x="312" y="710" width="18" height="64" rx="9"/>
+    <rect x="346" y="692" width="18" height="100" rx="9"/>
+    <rect x="380" y="668" width="18" height="148" rx="9"/>
+    <rect x="414" y="700" width="18" height="84" rx="9"/>
+    <rect x="448" y="716" width="18" height="52" rx="9"/>
+    <rect x="482" y="688" width="18" height="108" rx="9"/>
+    <rect x="550" y="676" width="18" height="132" rx="9"/>
+    <rect x="584" y="698" width="18" height="88" rx="9"/>
+    <rect x="618" y="664" width="18" height="156" rx="9"/>
+    <rect x="652" y="694" width="18" height="96" rx="9"/>
+    <rect x="686" y="712" width="18" height="60" rx="9"/>
+    <rect x="720" y="690" width="18" height="104" rx="9"/>
+    <rect x="754" y="708" width="18" height="68" rx="9"/>
+    <rect x="788" y="724" width="18" height="36" rx="9"/>
+  </g>
+
+  <!-- cue marker -->
+  <rect x="516" y="560" width="22" height="300" rx="11" fill="url(#cue)"/>
+  <circle cx="527" cy="860" r="26" fill="url(#cue)"/>
+
+  <!-- lyric slide (glass) -->
+  <g filter="url(#shadow)">
+    <rect x="200" y="232" width="624" height="352" rx="48" fill="url(#card)"/>
+  </g>
+  <rect x="201.5" y="233.5" width="621" height="349" rx="46.5" fill="none" stroke="url(#cardEdge)" stroke-width="3"/>
+  <g fill="#ffffff">
+    <rect x="290" y="352" width="444" height="34" rx="17"/>
+    <rect x="340" y="420" width="344" height="34" rx="17" fill-opacity="0.75"/>
+  </g>
+  <circle cx="760" cy="296" r="26" fill="url(#rec)"/>
+</svg>

@@ -5,12 +5,17 @@ import SwiftUI
 struct PrimeCueRecorderApp: App {
     @State private var model = AppModel()
 
+    init() {
+        _ = Updates.shared
+    }
+
     var body: some Scene {
         Window("Prime Cue Recorder", id: "main") {
             ContentView(model: model)
         }
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
+        .commands { UpdateCommands() }
 
         Settings {
             SettingsView(model: model)
@@ -138,8 +143,8 @@ private struct SongRow: View {
     @ViewBuilder private var lyricsLabel: some View {
         if let plan = model.pendingLyrics[song.id] {
             Text("\(plan.cues.count) recorded").foregroundStyle(plain ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
-        } else if !song.hasSections {
-            Text("No sections")
+        } else if !song.isMusic {
+            Text("No music")
         } else if song.lyricCues == 0 {
             Text("Needs lyrics").foregroundStyle(plain ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
         } else {
@@ -154,7 +159,7 @@ private struct SongRow: View {
             Image(systemName: "circle.fill").font(.system(size: 7))
                 .foregroundStyle(plain ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
                 .help("Changes waiting to be saved")
-        } else if song.hasSections && song.lyricCues == 0 {
+        } else if song.needsLyrics {
             Image(systemName: "exclamationmark.circle")
                 .foregroundStyle(plain ? AnyShapeStyle(.primary) : AnyShapeStyle(.orange))
                 .help("No lyric cues yet")
@@ -212,7 +217,7 @@ private struct SaveCard: View {
     private var summary: String {
         let playlist = model.playlistChanges.count
         let lyrics = model.pendingLyrics.count
-        let missing = model.songs.filter { $0.hasSections && $0.lyricCues == 0 && model.pendingLyrics[$0.id] == nil }.count
+        let missing = model.songs.filter { $0.needsLyrics && model.pendingLyrics[$0.id] == nil }.count
         var parts: [String] = []
         if playlist > 0 { parts.append("\(playlist) playlist cue\(playlist == 1 ? "" : "s") to set") }
         if lyrics > 0 { parts.append("\(lyrics) song\(lyrics == 1 ? "" : "s") recorded") }
@@ -250,8 +255,7 @@ private struct ReadyView: View {
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
                     Text(song.name).font(.largeTitle.weight(.semibold)).multilineTextAlignment(.center)
-                    Text("\(Int(song.tempo.rounded())) BPM  ·  \(song.arrangement.count) sections")
-                        .foregroundStyle(.secondary)
+                    Text(subtitle).foregroundStyle(.secondary)
                 }
                 .padding(.top, 20)
 
@@ -262,6 +266,13 @@ private struct ReadyView: View {
             .frame(maxWidth: 640)
             .frame(maxWidth: .infinity)
         }
+    }
+
+    private var subtitle: String {
+        guard entry.isMusic else { return "No music" }
+        let tempo = "\(Int(song.tempo.rounded())) BPM"
+        if song.hasSections { return tempo + "  ·  \(song.arrangement.count) sections" }
+        return tempo + "  ·  No sections" + (song.duration.map { "  ·  " + clock($0, tenths: false) } ?? "")
     }
 }
 
@@ -348,9 +359,14 @@ private struct LyricsCard: View {
                     Label("None yet", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
                 }
             }
-            if song.arrangement.isEmpty {
-                Text("This song has no sections in Prime, so lyric cues can't be timed.")
+            if !entry.isMusic {
+                Text("This item has no music, so it doesn't need lyric cues.")
                     .foregroundStyle(.secondary)
+            } else if !song.hasSections && song.duration == nil {
+                Text("This song has no sections in Prime and its audio isn't downloaded, so the app can't "
+                     + "tell how long it is. Play it once in Prime to download it, then choose it again.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(caption).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -376,8 +392,13 @@ private struct LyricsCard: View {
         if entry.lyricCues > 0 {
             return "This song already has lyric cues. Recording replaces them when you save."
         }
-        return "Play the song in Prime from the top and click through the slides in ProPresenter. "
-            + String(format: "Cues fire %g seconds before your clicks to cover MIDI delay.", model.leadSeconds)
+        let lead = String(format: "Cues fire %g seconds before your clicks to cover MIDI delay.", model.leadSeconds)
+        if !song.hasSections {
+            return "Press Record and Play in Prime at the same moment, then click through the slides in "
+                + "ProPresenter. This song has no sections in Prime, so afterwards you'll check where the "
+                + "first slide lands in the song. " + lead
+        }
+        return "Play the song in Prime from the top and click through the slides in ProPresenter. " + lead
     }
 }
 
@@ -484,6 +505,10 @@ private struct ReviewView: View {
                     .help("Covers the delay between Prime sending MIDI and ProPresenter changing slides.")
                 }
 
+                if model.song?.hasSections == false {
+                    FirstSlideCard(model: model)
+                }
+
                 ForEach(plan.warnings, id: \.self) { warning in
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
                         .symbolRenderingMode(.multicolor)
@@ -494,7 +519,7 @@ private struct ReviewView: View {
 
                 List(Array(plan.cues.enumerated()), id: \.offset) { _, cue in
                     SlideRow(slide: cue.slide, group: pretty(cue.sectionType), text: cue.text,
-                             trailing: String(format: "beat %.2f", cue.beat))
+                             trailing: cue.time.map { clock($0) } ?? String(format: "beat %.2f", cue.beat))
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
@@ -521,6 +546,46 @@ private struct ReviewView: View {
                 .padding(.horizontal, 24).padding(.bottom, 20)
             }
         }
+    }
+}
+
+/// Songs without sections are timed by the clock, so they need one fixed point: where the first
+/// slide lands in the song. Prime's timeline shows it.
+private struct FirstSlideCard: View {
+    @Bindable var model: AppModel
+    @State private var text = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "timer").font(.title2).foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Where does the first slide land?").font(.headline)
+                Text("This song has no sections in Prime. Find the first line in Prime's timeline and set its "
+                     + "time here; the rest follow your clicks.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            TextField("0:00.0", text: $text)
+                .font(.title3.monospacedDigit())
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 90)
+                .focused($editing)
+                .onSubmit(commit)
+                .onChange(of: editing) { if !editing { commit() } }
+            Stepper("First slide", value: $model.firstSlideTime, in: 0...3600, step: 0.1)
+                .labelsHidden()
+        }
+        .padding(16)
+        .glassCard(shape: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onAppear { text = clock(model.firstSlideTime) }
+        .onChange(of: model.firstSlideTime) { if !editing { text = clock(model.firstSlideTime) } }
+    }
+
+    private func commit() {
+        if let seconds = parseClock(text) { model.firstSlideTime = seconds }
+        text = clock(model.firstSlideTime)
     }
 }
 
@@ -706,6 +771,22 @@ extension View {
 private func firstLine(_ text: String) -> String {
     let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
     return line.isEmpty ? "Blank" : line
+}
+
+/// 83.4 -> "1:23.4"
+private func clock(_ seconds: Double, tenths: Bool = true) -> String {
+    let t = max(0, tenths ? (seconds * 10).rounded() / 10 : seconds.rounded())
+    let m = Int(t) / 60
+    return tenths ? String(format: "%d:%04.1f", m, t - Double(m * 60)) : String(format: "%d:%02d", m, Int(t) % 60)
+}
+
+/// "1:23.4", "83.4" or "1:23" -> seconds
+private func parseClock(_ text: String) -> Double? {
+    let parts = text.trimmingCharacters(in: .whitespaces).split(separator: ":", omittingEmptySubsequences: false)
+    guard (1...2).contains(parts.count), let last = Double(parts.last!) else { return nil }
+    if parts.count == 1 { return last }
+    guard let minutes = Int(parts[0]), last < 60 else { return nil }
+    return Double(minutes * 60) + last
 }
 
 private func pretty(_ type: String) -> String {

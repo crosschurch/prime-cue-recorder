@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f7fb"/>
+      <stop offset="1" stop-color="#e9eaf3"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="400" fill="url(#bg)"/>
+  <text x="320" y="62" text-anchor="middle" font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif"
+        font-size="22" font-weight="600" fill="#1d1d1f">Install Prime Cue Recorder</text>
+  <text x="320" y="90" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif"
+        font-size="14" fill="#6e6e73">Drag the app into your Applications folder.</text>
+  <g fill="none" stroke="#9a9cb8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M262 210 H372"/>
+    <path d="M354 192 L376 210 L354 228"/>
+  </g>
+</svg>

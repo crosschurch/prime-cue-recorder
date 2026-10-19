@@ -32,6 +32,7 @@ public struct PlannedCue: Equatable, Sendable {
     public let beat: Double     // beat in the played arrangement, from song start
     public let sectionType: String
     public let text: String
+    public var time: Double? = nil  // seconds into the song, for songs timed by the clock
 }
 
 public struct CuePlan: Sendable {
@@ -68,9 +69,7 @@ public enum CueEngine {
             plan.warnings.append("This song has no sections in Prime.")
             return plan
         }
-        // A slide replaced within 0.6 s was a slip of the finger, not a line.
-        let clicks = raw.indices.filter { $0 + 1 == raw.count || raw[$0 + 1].time - raw[$0].time >= 0.6 }
-            .map { raw[$0] }
+        let clicks = deslip(raw)
 
         var starts: [Double] = []
         var total = 0.0
@@ -152,6 +151,43 @@ public enum CueEngine {
                                  + "plays, so slides clicked during the repeat were left out.")
         }
         return plan
+    }
+
+    /// Timing for a song with no sections in Prime (tempo changes, uploaded songs). Prime stores
+    /// these cues as a fraction of the whole song, so the clicks only need lining up with the
+    /// song once: `firstSlideAt` is where the first click lands, in seconds into the song
+    /// (nil keeps the recorded timing, right when Record and Play were pressed together).
+    public static func planByTime(clicks raw: [SlideClick], duration: Double, firstSlideAt: Double?,
+                                  leadSeconds: Double) -> CuePlan {
+        var plan = CuePlan()
+        let clicks = deslip(raw)
+        guard let first = clicks.first, duration > 0 else { return plan }
+        let offset = (firstSlideAt ?? first.time) - first.time
+        var early = 0
+        var late = 0
+        for c in clicks {
+            var t = c.time + offset - leadSeconds
+            if t < 0 { early += 1 }
+            if t > duration { late += 1 }
+            t = min(max((t * 100).rounded() / 100, 0), duration - 0.01)
+            plan.cues.append(PlannedCue(
+                slide: c.slide, sectionId: "",
+                progress: (t / duration * 1_000_000).rounded() / 1_000_000,
+                beat: 0, sectionType: c.group, text: c.text, time: t))
+        }
+        if early > 0 {
+            plan.warnings.append("\(early) slide(s) land before the song starts; they'll fire at the very start.")
+        }
+        if late > 0 {
+            plan.warnings.append("\(late) slide(s) land after the song ends; they'll fire at the very end. "
+                                 + "Is the first slide's time right?")
+        }
+        return plan
+    }
+
+    /// A slide replaced within 0.6 s was a slip of the finger, not a line.
+    public static func deslip(_ raw: [SlideClick]) -> [SlideClick] {
+        raw.indices.filter { $0 + 1 == raw.count || raw[$0 + 1].time - raw[$0].time >= 0.6 }.map { raw[$0] }
     }
 
     /// Least-squares line through (time, beat). Keeps the song's tempo when there are too

@@ -96,3 +96,33 @@ final class WeekSetupTests: XCTestCase {
         XCTAssertEqual(WeekSetup.playlistCuePosition(arrangement: []).sectionId, "")
     }
 }
+
+final class ClockTimingTests: XCTestCase {
+    let clicks = [
+        SlideClick(time: 2.8, slide: 5, group: "Chorus", text: "slip"),
+        SlideClick(time: 3.0, slide: 2, group: "Verse 1", text: "a"),
+        SlideClick(time: 13.0, slide: 3, group: "Verse 1", text: "b"),
+        SlideClick(time: 23.0, slide: 4, group: "Chorus", text: "c"),
+    ]
+
+    func testCuesAreAFractionOfTheSongFromTheFirstSlide() {
+        // Record was pressed 9 s before Play: the first slide is really 12 s into a 200 s song.
+        let plan = CueEngine.planByTime(clicks: clicks, duration: 200, firstSlideAt: 12, leadSeconds: 0.5)
+        XCTAssertEqual(plan.cues.map(\.slide), [2, 3, 4])  // the slip is gone
+        XCTAssertEqual(plan.cues.map(\.time), [11.5, 21.5, 31.5])
+        XCTAssertEqual(plan.cues.map(\.progress), [0.0575, 0.1075, 0.1575])
+        XCTAssertTrue(plan.cues.allSatisfy { $0.sectionId == "" })
+        XCTAssertTrue(plan.warnings.isEmpty)
+    }
+
+    func testRecordedTimingWithoutAFirstSlideTime() {
+        let plan = CueEngine.planByTime(clicks: clicks, duration: 100, firstSlideAt: nil, leadSeconds: 0.5)
+        XCTAssertEqual(plan.cues.first?.time, 2.5)
+    }
+
+    func testClicksPastTheEndAreWarnedAndClamped() {
+        let plan = CueEngine.planByTime(clicks: clicks, duration: 30, firstSlideAt: 12, leadSeconds: 0)
+        XCTAssertEqual(plan.cues.last?.time, 29.99)
+        XCTAssertEqual(plan.warnings.count, 1)
+    }
+}

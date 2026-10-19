@@ -2,10 +2,12 @@
 import AppKit
 import CueCore
 
-/// PCR_DEMO=ready|recording|review|waiting|saved swift run — sample data for checking the UI
+/// PCR_DEMO=ready|recording|review|waiting|saved swift run (add -clock for a song without sections) — sample data for checking the UI
 /// without ProPresenter or a Prime library.
 extension AppModel {
-    func loadDemo(_ phase: String) {
+    func loadDemo(_ demo: String) {
+        let clock = demo.hasSuffix("-clock")
+        let phase = clock ? String(demo.dropLast(6)) : demo
         ppPort = ""  // so nothing tries to reach a real ProPresenter
         let sections = [("intro", 8), ("verse_1", 32), ("chorus", 32), ("verse_2", 32), ("chorus_2", 32),
                         ("bridge", 32), ("outro", 16)]
@@ -19,7 +21,7 @@ extension AppModel {
         songs = [
             SetlistSong(id: "a", name: "Holy Forever", versionName: "", lyricCues: 31, playlistCues: [3], isActive: false),
             SetlistSong(id: "v", name: "Goodness of God", versionName: "", lyricCues: 0, isActive: true),
-            SetlistSong(id: "b", name: "Host & Announcements", versionName: "", lyricCues: 0, hasSections: false,
+            SetlistSong(id: "b", name: "Host & Announcements", versionName: "", lyricCues: 0, hasSections: false, isMusic: false,
                         isActive: false),
             SetlistSong(id: "c", name: "What A God (Live)", versionName: "", lyricCues: 0, playlistCues: [7], isActive: false),
             SetlistSong(id: "d", name: "What a God / He Wears a Crown", versionName: "", lyricCues: 44,
@@ -39,8 +41,11 @@ extension AppModel {
         itemNumbers = WeekSetup.match(songs: songs, items: playlistItems).mapValues { itemNumber($0) }
         versionId = "v"
         error = nil
-        song = PrimeSong(versionId: "v", name: "Goodness of God", tempo: 126, sections: arrangement,
-                         arrangement: arrangement)
+        song = clock
+            ? PrimeSong(versionId: "v", name: "Goodness of God", tempo: 126, sections: [], arrangement: [],
+                        duration: 277.6)
+            : PrimeSong(versionId: "v", name: "Goodness of God", tempo: 126, sections: arrangement,
+                        arrangement: arrangement)
         connection = .connected("ProPresenter 7.16")
         let lines = [("Verse 1", "I love You, Lord"), ("Verse 1", "For Your mercy never fails me"),
                      ("Verse 1", "From the moment I wake up"), ("Verse 1", "With every breath I have"),

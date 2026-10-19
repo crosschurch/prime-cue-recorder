@@ -16,9 +16,9 @@ final class AppModel {
         case custom([Int])      // several playlist cues (a medley); left alone
     }
 
-    var phase = Phase.ready
+    var phase = Phase.ready { didSet { updateBusy() } }
     var connection = Connection.unknown
-    var saveState = SaveState.idle
+    var saveState = SaveState.idle { didSet { updateBusy() } }
     var error: String?
 
     // Settings
@@ -54,6 +54,9 @@ final class AppModel {
     var presentationName: String?
     private(set) var otherPresentationClicks = 0
     var recordingStartedAt: Date?
+    /// Songs without sections: where the first recorded slide lands, in seconds into the song.
+    /// nil keeps the recorded timing (Record and Play pressed together).
+    var firstSlideAt: Double?
     /// Recorded lyric cues waiting to be saved, by Prime version id.
     var pendingLyrics: [String: CuePlan] = [:]
 
@@ -77,7 +80,19 @@ final class AppModel {
 
     var plan: CuePlan? {
         guard let song, !clicks.isEmpty else { return nil }
-        return CueEngine.plan(clicks: clicks, arrangement: song.arrangement, tempo: song.tempo, leadSeconds: leadSeconds)
+        if song.hasSections {
+            return CueEngine.plan(clicks: clicks, arrangement: song.arrangement, tempo: song.tempo,
+                                  leadSeconds: leadSeconds)
+        }
+        guard let duration = song.duration else { return nil }
+        return CueEngine.planByTime(clicks: clicks, duration: duration, firstSlideAt: firstSlideAt,
+                                    leadSeconds: leadSeconds)
+    }
+
+    /// Where the first slide lands in the song, as the review screen shows it.
+    var firstSlideTime: Double {
+        get { firstSlideAt ?? CueEngine.deslip(clicks).first?.time ?? 0 }
+        set { firstSlideAt = max(0, newValue) }
     }
 
     // MARK: Week overview
@@ -103,7 +118,7 @@ final class AppModel {
     var changeCount: Int { playlistChanges.count + pendingLyrics.count }
 
     var nextSongNeedingLyrics: SetlistSong? {
-        let order = songs.filter { $0.hasSections && $0.lyricCues == 0 && pendingLyrics[$0.id] == nil }
+        let order = songs.filter { $0.needsLyrics && pendingLyrics[$0.id] == nil }
         let current = songs.firstIndex { $0.id == versionId } ?? -1
         return order.first { s in (songs.firstIndex { $0.id == s.id } ?? 0) > current } ?? order.first
     }
@@ -134,7 +149,7 @@ final class AppModel {
             songs = try db.songs(setlistId: setlistId, notes: notes)
             rematch()
             versionId = songs.contains { $0.id == selected } ? selected
-                : (songs.first { $0.hasSections && $0.lyricCues == 0 } ?? songs.first)?.id
+                : (songs.first { $0.needsLyrics } ?? songs.first)?.id
         } catch { self.error = error.localizedDescription }
     }
 
@@ -188,6 +203,7 @@ final class AppModel {
     func startRecording() {
         guard let client else { connection = .failed("Enter ProPresenter's network port."); return }
         clicks = []
+        firstSlideAt = nil
         presentationName = nil
         otherPresentationClicks = 0
         error = nil
@@ -262,6 +278,10 @@ final class AppModel {
 
     func forget(_ versionId: String) {
         pendingLyrics[versionId] = nil
+    }
+
+    private func updateBusy() {
+        Updates.shared.busy = phase == .recording || saveState == .waitingForPrime
     }
 
     // MARK: Saving
