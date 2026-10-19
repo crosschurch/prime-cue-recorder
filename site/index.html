@@ -6,6 +6,7 @@
 <title>Prime Cue Recorder</title>
 <meta name="description" content="A free Mac app that records your ProPresenter slide clicks while a song plays in Loop Community Prime, then saves them as lyric cues in Prime.">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#1b1a52">
 <meta property="og:title" content="Prime Cue Recorder">
 <meta property="og:description" content="Record your ProPresenter slide clicks once. Prime advances the lyrics from then on.">
 <meta property="og:image" content="https://prime.joshcirre.com/ready.png">
@@ -15,24 +16,27 @@
 <style>
   :root {
     --bg: #ffffff;
-    --bg-soft: #f5f5f7;
+    --bg-soft: #f5f5f8;
+    --card: #ffffff;
     --text: #1d1d1f;
     --muted: #6e6e73;
-    --line: rgba(0, 0, 0, 0.08);
-    --accent: #e8333b;
-    --accent-hover: #d42a32;
-    --shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
+    --line: rgba(20, 18, 63, 0.09);
+    --indigo: #4b55d6;
+    --indigo-deep: #2a2c8a;
+    --night: #14123f;
+    --cue: #ff8a3a;
+    --cue-grad: linear-gradient(180deg, #ffb14a, #ff6a2b);
+    --shadow: 0 40px 80px -30px rgba(20, 18, 63, 0.45), 0 0 0 1px rgba(20, 18, 63, 0.08);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #000000;
-      --bg-soft: #161617;
+      --bg: #0b0a1f;
+      --bg-soft: #121130;
+      --card: #17163a;
       --text: #f5f5f7;
-      --muted: #a1a1a6;
-      --line: rgba(255, 255, 255, 0.12);
-      --accent: #ff453a;
-      --accent-hover: #ff5d54;
-      --shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1);
+      --muted: #a4a3c2;
+      --line: rgba(255, 255, 255, 0.1);
+      --shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.1);
     }
   }
   * { box-sizing: border-box; }
@@ -46,194 +50,354 @@
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
   }
-  a { color: var(--accent); text-decoration: none; }
+  a { color: var(--indigo); text-decoration: none; }
+  @media (prefers-color-scheme: dark) { a { color: #9aa1ff; } }
   a:hover { text-decoration: underline; }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
-
-  header.hero { text-align: center; padding: 96px 0 56px; }
-  .app-icon { width: 128px; height: 128px; display: block; margin: 0 auto 20px; }
-  .eyebrow { color: var(--muted); font-size: 15px; font-weight: 500; margin: 0 0 12px; }
-  h1 {
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  h1, h2, h3 {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
-    font-size: clamp(40px, 7vw, 64px);
-    line-height: 1.05;
     letter-spacing: -0.02em;
+  }
+
+  /* Hero: the icon's own colors */
+  .hero {
+    position: relative;
+    overflow: hidden;
+    color: #fff;
+    text-align: center;
+    padding: 88px 0 0;
+    background:
+      radial-gradient(ellipse 70% 55% at 50% 0%, rgba(140, 150, 255, 0.45), transparent 70%),
+      linear-gradient(180deg, #4b55d6 0%, #2a2c8a 48%, #14123f 100%);
+  }
+  .hero::after {
+    /* the icon's waveform, faintly, behind the screenshot */
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 360px;
+    background: repeating-linear-gradient(90deg, rgba(255,255,255,0.07) 0 6px, transparent 6px 22px);
+    -webkit-mask-image: linear-gradient(180deg, transparent, #000 40%, transparent);
+            mask-image: linear-gradient(180deg, transparent, #000 40%, transparent);
+    pointer-events: none;
+  }
+  .hero .wrap { position: relative; z-index: 1; }
+  .app-icon {
+    width: 148px; height: 148px;
+    display: block;
+    margin: 0 auto 28px;
+    filter: drop-shadow(0 24px 40px rgba(5, 4, 30, 0.55));
+  }
+  .eyebrow {
+    display: inline-block;
+    margin: 0 0 18px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(12px);
+  }
+  .hero h1 {
+    font-size: clamp(44px, 7.5vw, 76px);
+    line-height: 1.02;
     font-weight: 700;
-    margin: 0;
+    margin: 0 0 18px;
   }
   .lede {
     font-size: clamp(19px, 2.4vw, 23px);
-    color: var(--muted);
-    max-width: 620px;
-    margin: 18px auto 36px;
     line-height: 1.4;
+    color: rgba(255, 255, 255, 0.82);
+    max-width: 640px;
+    margin: 0 auto 36px;
   }
   .download {
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    background: var(--accent);
+    padding: 16px 30px;
+    border-radius: 999px;
+    background: var(--cue-grad);
     color: #fff;
     font-size: 18px;
     font-weight: 600;
-    padding: 15px 32px;
-    border-radius: 980px;
-    transition: background 0.15s ease, transform 0.15s ease;
+    box-shadow: 0 14px 30px -10px rgba(255, 106, 43, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
   }
-  .download:hover { background: var(--accent-hover); text-decoration: none; }
+  .download:hover { text-decoration: none; transform: translateY(-1px); box-shadow: 0 18px 36px -10px rgba(255, 106, 43, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.35); }
   .download:active { transform: scale(0.98); }
-  .download svg { width: 18px; height: 18px; }
-  .req { color: var(--muted); font-size: 14px; margin: 14px 0 0; }
-
-  .shot { margin: 0 auto; max-width: 900px; padding: 0 0 24px; }
-  .shot img {
+  .download svg { width: 20px; height: 20px; }
+  .req { color: rgba(255, 255, 255, 0.6); font-size: 14px; margin: 16px 0 0; }
+  .hero-shot {
+    margin: 64px auto 0;
+    max-width: 960px;
+    position: relative;
+  }
+  .hero-shot img {
     display: block;
     width: 100%;
     height: auto;
-    border-radius: 14px;
-    box-shadow: var(--shadow);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -10px 80px -10px rgba(5, 4, 30, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.14);
   }
 
-  section { padding: 72px 0; }
-  section + section { border-top: 1px solid var(--line); }
-  h2 {
-    font-size: clamp(28px, 4vw, 36px);
-    letter-spacing: -0.015em;
-    line-height: 1.15;
-    margin: 0 0 36px;
-    text-align: center;
-  }
+  section { padding: 104px 0; }
+  section.soft { background: var(--bg-soft); }
+  .kicker { color: var(--cue); font-weight: 600; font-size: 15px; margin: 0 0 10px; }
+  h2 { font-size: clamp(32px, 4.6vw, 48px); line-height: 1.08; margin: 0 0 18px; font-weight: 700; }
+  .intro { color: var(--muted); font-size: 20px; max-width: 640px; margin: 0 0 56px; }
+  .center { text-align: center; }
+  .center .intro { margin-left: auto; margin-right: auto; }
 
-  .steps {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
-    counter-reset: step;
-  }
+  /* Steps */
+  .steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; counter-reset: step; }
   .steps li {
-    background: var(--bg-soft);
-    border-radius: 18px;
-    padding: 28px 24px;
     counter-increment: step;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 28px;
   }
   .steps li::before {
     content: counter(step);
-    display: inline-grid;
+    display: grid;
     place-items: center;
-    width: 30px; height: 30px;
-    border-radius: 50%;
-    background: var(--accent);
+    width: 40px; height: 40px;
+    margin-bottom: 18px;
+    border-radius: 12px;
+    font-weight: 700;
     color: #fff;
-    font-weight: 600;
-    font-size: 15px;
+    background: linear-gradient(180deg, #4b55d6, #2a2c8a);
+    box-shadow: 0 8px 18px -8px rgba(42, 44, 138, 0.8);
+  }
+  .steps h3, .features h3 { font-size: 19px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .steps p, .features p { margin: 0; color: var(--muted); font-size: 16px; }
+
+  /* Split rows: text beside a screenshot */
+  .split { display: grid; grid-template-columns: 5fr 7fr; gap: 56px; align-items: center; }
+  .split + .split { margin-top: 104px; }
+  .split.flip { grid-template-columns: 7fr 5fr; }
+  .split.flip .copy { order: 2; }
+  .split .intro { margin-bottom: 0; font-size: 18px; }
+  .split img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+  }
+
+  /* Features */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .features div {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 28px;
+  }
+  .features svg {
+    width: 30px; height: 30px;
     margin-bottom: 16px;
+    color: var(--indigo);
   }
-  .steps h3 { font-size: 19px; margin: 0 0 6px; letter-spacing: -0.01em; }
-  .steps p { margin: 0; color: var(--muted); font-size: 16px; }
-  .after { text-align: center; color: var(--muted); max-width: 640px; margin: 32px auto 0; }
+  @media (prefers-color-scheme: dark) { .features svg { color: #9aa1ff; } }
 
-  .review { margin-top: 48px; }
+  /* Before you start */
+  .checklist { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; max-width: 760px; }
+  .checklist li {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 14px;
+    padding: 20px 24px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+  }
+  .checklist li::before {
+    content: "";
+    width: 22px; height: 22px;
+    margin-top: 2px;
+    border-radius: 50%;
+    background: var(--cue-grad);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-1.2 14.2-4.5-4.5 1.4-1.4 3.1 3.1 6.1-6.1 1.4 1.4-7.5 7.5Z'/%3E%3C/svg%3E") center / contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-1.2 14.2-4.5-4.5 1.4-1.4 3.1 3.1 6.1-6.1 1.4 1.4-7.5 7.5Z'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  .checklist strong { display: block; margin-bottom: 2px; }
+  .checklist span { color: var(--muted); font-size: 16px; }
 
-  .notes {
-    max-width: 640px;
-    margin: 0 auto;
-    padding: 0;
-    list-style: none;
+  /* Closing call to action */
+  .cta {
+    text-align: center;
+    color: #fff;
+    padding: 96px 24px;
+    background:
+      radial-gradient(ellipse 60% 80% at 50% 0%, rgba(140, 150, 255, 0.35), transparent 70%),
+      linear-gradient(180deg, #2a2c8a, #14123f);
   }
-  .notes li {
-    padding: 18px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .notes li:last-child { border-bottom: 0; }
-  .notes strong { display: block; font-weight: 600; margin-bottom: 2px; }
-  .notes span { color: var(--muted); font-size: 16px; }
+  .cta img { width: 96px; height: 96px; margin-bottom: 20px; filter: drop-shadow(0 18px 30px rgba(5, 4, 30, 0.6)); }
+  .cta h2 { color: #fff; margin-bottom: 28px; }
 
   footer {
-    border-top: 1px solid var(--line);
-    padding: 32px 0 48px;
+    padding: 36px 0 48px;
     color: var(--muted);
     font-size: 13px;
     text-align: center;
   }
   footer p { margin: 4px 0; }
 
-  @media (max-width: 760px) {
-    header.hero { padding: 64px 0 40px; }
-    section { padding: 56px 0; }
-    .steps { grid-template-columns: 1fr; }
-    .shot img { border-radius: 10px; }
+  @media (max-width: 860px) {
+    .hero { padding-top: 64px; }
+    section { padding: 72px 0; }
+    .steps, .features { grid-template-columns: 1fr; }
+    .split, .split.flip { grid-template-columns: 1fr; gap: 32px; }
+    .split.flip .copy { order: 0; }
+    .split + .split { margin-top: 72px; }
+    .hero-shot { margin-top: 48px; }
   }
 </style>
 </head>
 <body>
 
-<header class="hero wrap">
-  <img class="app-icon" src="icon.png" width="128" height="128" alt="">
-  <p class="eyebrow">For church production teams</p>
-  <h1>Prime Cue Recorder</h1>
-  <p class="lede">Click through your lyric slides once while the song plays in Prime. From then on, Prime advances ProPresenter for you.</p>
-  <a class="download" href="https://github.com/crosschurch/prime-cue-recorder/releases/latest/download/PrimeCueRecorder.dmg">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 11 6 6 6-6"/><path d="M5 20h14"/></svg>
-    Download for Mac
-  </a>
-  <p class="req">macOS 14 or later · free · updates itself</p>
+<header class="hero">
+  <div class="wrap">
+    <img class="app-icon" src="icon.png" width="148" height="148" alt="">
+    <p class="eyebrow">For church production teams</p>
+    <h1>Prime Cue Recorder</h1>
+    <p class="lede">Click through your lyric slides once while the song plays in Prime. From then on, Prime advances ProPresenter for you.</p>
+    <a class="download" href="https://github.com/crosschurch/prime-cue-recorder/releases/latest/download/PrimeCueRecorder.dmg">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 11 6 6 6-6"/><path d="M5 20h14"/></svg>
+      Download for Mac
+    </a>
+    <p class="req">Free · macOS 14 or later · Apple silicon and Intel</p>
+    <figure class="hero-shot">
+      <img src="ready.png" width="1020" height="692" alt="Prime Cue Recorder showing this week's setlist, with Goodness of God ready to record and its ProPresenter playlist item matched.">
+    </figure>
+  </div>
 </header>
 
-<div class="wrap">
-  <figure class="shot">
-    <img src="ready.png" width="900" height="612" alt="Prime Cue Recorder ready to record the song Goodness of God, with a Record button and four short steps.">
-  </figure>
-</div>
-
 <main>
-  <section class="wrap" id="how">
-    <h2>How it works</h2>
-    <ol class="steps">
-      <li>
-        <h3>Record while you play the song in Prime</h3>
-        <p>Pick the song and press Record, then start it in Prime from the top.</p>
-      </li>
-      <li>
-        <h3>Click through slides in ProPresenter</h3>
-        <p>Advance the lyrics the way you would on a Sunday. The app notes the beat of each click.</p>
-      </li>
-      <li>
-        <h3>Save cues to Prime</h3>
-        <p>Check the list, nudge the timing if you need to, and save. Prime sends the MIDI cues from then on.</p>
-      </li>
-    </ol>
-    <p class="after">It can also set each week's ProPresenter playlist item cues in Prime, so the right song comes up when it starts.</p>
-    <figure class="shot review">
-      <img src="review.png" width="900" height="612" alt="A list of ten recorded lyric cues, each with its slide text, section, and beat, with a Save to Prime button." loading="lazy">
-    </figure>
+  <section id="how">
+    <div class="wrap">
+      <p class="kicker">How it works</p>
+      <h2>Record a song once.<br>Prime runs the slides after that.</h2>
+      <p class="intro">No typing in beat numbers or dragging cues around in Prime. Just do what you already do on a Sunday.</p>
+      <ol class="steps">
+        <li>
+          <h3>Press Record and play the song</h3>
+          <p>Pick the song from this week's setlist, press Record, and start it in Prime from the top.</p>
+        </li>
+        <li>
+          <h3>Click through the slides</h3>
+          <p>Advance the lyrics in ProPresenter the way you would on a Sunday. The app catches every click.</p>
+        </li>
+        <li>
+          <h3>Save to Prime</h3>
+          <p>Check the list and save. Prime sends the MIDI cues from then on, just ahead of the words.</p>
+        </li>
+      </ol>
+    </div>
   </section>
 
-  <section class="wrap" id="before">
-    <h2>Before you start</h2>
-    <ul class="notes">
-      <li>
-        <strong>Turn on Network in ProPresenter.</strong>
-        <span>In ProPresenter, go to Settings &gt; Network and check Enable Network, then enter the same port in the app. That's how it sees your slide clicks.</span>
-      </li>
-      <li>
-        <strong>Quit Prime when saving.</strong>
-        <span>Cues are written straight into Prime's library, so Prime needs to be closed for that step.</span>
-      </li>
-      <li>
-        <strong>Your library is backed up first.</strong>
-        <span>Every save copies Prime's database to Documents/PrimeBackups before changing anything. Only lyric and playlist item cues are replaced; lights and other cues are kept.</span>
-      </li>
-    </ul>
+  <section class="soft">
+    <div class="wrap">
+      <div class="split">
+        <div class="copy">
+          <p class="kicker">Lined up with the song</p>
+          <h2>Timing that snaps to the music.</h2>
+          <p class="intro">Each section change you click (Verse, Chorus, Bridge) is matched to that section in Prime, so a cue lands on the beat even if your click was a little late. Cues fire half a second early by default to cover MIDI delay.</p>
+        </div>
+        <img src="review.png" width="1020" height="692" alt="Ten recorded lyric cues, each with its slide text, section and beat." loading="lazy">
+      </div>
+      <div class="split flip">
+        <div class="copy">
+          <p class="kicker">Any song in Prime</p>
+          <h2>Even songs without sections.</h2>
+          <p class="intro">Uploaded songs and songs with tempo changes are timed by the clock. Tell the app where the first slide lands and the rest follow your clicks.</p>
+        </div>
+        <img src="first-slide.png" width="1020" height="692" alt="The review screen asking where the first slide lands, set to 0:05.3, above the list of cues." loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap center">
+      <p class="kicker">Built for every week</p>
+      <h2>Set up Sunday in minutes.</h2>
+      <p class="intro">Open ProPresenter and the app, and it walks you through this week's setlist.</p>
+    </div>
+    <div class="wrap features">
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M4 6h1M4 12h1M4 18h1"/></svg>
+        <h3>Playlist items, matched</h3>
+        <p>Each song is matched to its ProPresenter playlist item, so the right song comes up as it starts.</p>
+      </div>
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+        <h3>Missing lyrics, flagged</h3>
+        <p>Songs without lyric cues are marked, and Keep moves you straight to the next one.</p>
+      </div>
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+        <h3>Your MIDI setup</h3>
+        <p>Defaults to note 19 for lyrics and 18 for playlist items. Change the notes, channel and lead time in Settings.</p>
+      </div>
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+        <h3>Backed up first</h3>
+        <p>Every save copies Prime's library to Documents/PrimeBackups. Lights and other cues are never touched.</p>
+      </div>
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+        <h3>Updates itself</h3>
+        <p>New versions arrive on their own, so every campus stays on the same one. Never mid-recording.</p>
+      </div>
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <h3>A real Mac app</h3>
+        <p>Native, signed and notarized by Apple. Drag it into Applications and you're set.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="soft" id="before">
+    <div class="wrap">
+      <p class="kicker">Before you start</p>
+      <h2>Two things to know.</h2>
+      <p class="intro">That's all the setup there is.</p>
+      <ul class="checklist">
+        <li>
+          <div>
+            <strong>Turn on Network in ProPresenter.</strong>
+            <span>In ProPresenter, go to Settings › Network and check Enable Network, then enter the same port in the app. That's how it sees your slide clicks.</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Prime closes while saving.</strong>
+            <span>Cues are written straight into Prime's library, so the app asks Prime to quit for that step, then you open it and save to the cloud as usual.</span>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="cta">
+    <img src="icon.png" width="96" height="96" alt="">
+    <h2>Ready for Sunday?</h2>
+    <a class="download" href="https://github.com/crosschurch/prime-cue-recorder/releases/latest/download/PrimeCueRecorder.dmg">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 11 6 6 6-6"/><path d="M5 20h14"/></svg>
+      Download for Mac
+    </a>
+    <p class="req">Free · macOS 14 or later · Apple silicon and Intel</p>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <p>Free from Cross Church. Works on Apple silicon and Intel Macs. Signed and notarized.</p>
-    <p><a href="https://github.com/crosschurch/prime-cue-recorder">Source on GitHub</a></p>
+    <p>Free from Cross Church. <a href="https://github.com/crosschurch/prime-cue-recorder">Source on GitHub</a>.</p>
     <p>Not affiliated with Loop Community or Renewed Vision.</p>
   </div>
 </footer>
