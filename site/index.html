@@ -68,18 +68,7 @@
     padding: 88px 0 0;
     background:
       radial-gradient(ellipse 70% 55% at 50% 0%, rgba(140, 150, 255, 0.45), transparent 70%),
-      linear-gradient(180deg, #4b55d6 0%, #2a2c8a 48%, #14123f 100%);
-  }
-  .hero::after {
-    /* the icon's waveform, faintly, behind the screenshot */
-    content: "";
-    position: absolute;
-    left: 0; right: 0; bottom: 0;
-    height: 360px;
-    background: repeating-linear-gradient(90deg, rgba(255,255,255,0.07) 0 6px, transparent 6px 22px);
-    -webkit-mask-image: linear-gradient(180deg, transparent, #000 40%, transparent);
-            mask-image: linear-gradient(180deg, transparent, #000 40%, transparent);
-    pointer-events: none;
+      linear-gradient(180deg, #4b55d6 0%, #2a2c8a 40%, #14123f 72%, var(--bg) 100%);
   }
   .hero .wrap { position: relative; z-index: 1; }
   .app-icon {
@@ -131,17 +120,21 @@
   .download:active { transform: scale(0.98); }
   .download svg { width: 20px; height: 20px; }
   .req { color: rgba(255, 255, 255, 0.6); font-size: 14px; margin: 16px 0 0; }
+  /* Only the top three quarters of the app, fading into the next section */
   .hero-shot {
     margin: 64px auto 0;
     max-width: 960px;
-    position: relative;
+    aspect-ratio: 1020 / 520;
+    overflow: hidden;
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -10px 80px -10px rgba(5, 4, 30, 0.7);
+    -webkit-mask-image: linear-gradient(180deg, #000 45%, transparent);
+            mask-image: linear-gradient(180deg, #000 45%, transparent);
   }
   .hero-shot img {
     display: block;
     width: 100%;
     height: auto;
-    border-radius: 14px 14px 0 0;
-    box-shadow: 0 -10px 80px -10px rgba(5, 4, 30, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.14);
   }
 
   section { padding: 104px 0; }
@@ -397,7 +390,7 @@
 
 <footer>
   <div class="wrap">
-    <p>Free from Cross Church. <a href="https://github.com/crosschurch/prime-cue-recorder">Source on GitHub</a>.</p>
+    <p>Free from <a href="https://crosschurchcares.com">Cross Church</a>. <a href="https://github.com/crosschurch/prime-cue-recorder">Source on GitHub</a>.</p>
     <p>Not affiliated with Loop Community or Renewed Vision.</p>
   </div>
 </footer>
