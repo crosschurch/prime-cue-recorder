@@ -39,8 +39,9 @@ struct DiskAccessSheet: View {
             Text("Prime keeps your setlists and cues in its own private folder on this Mac. Prime Cue "
                  + "Recorder reads your songs from there and saves the cues you record back into it. "
                  + "It never touches anything else.")
-            Text("Without Full Disk Access, macOS asks you to Allow this every time the app opens. "
-                 + "Turn it on once and it stays on, through updates too.")
+            Text("Turn on Full Disk Access once and it stays on, through updates too. Or choose Not Now: "
+                 + "the app works the same, but macOS will ask you to Allow it every time you open the app. "
+                 + "You can turn it on later in Settings.")
                 .foregroundStyle(.secondary)
             if !granted {
                 GroupBox {
