@@ -55,10 +55,18 @@ struct ContentView: View {
         .sheet(isPresented: $model.showShift) {
             ShiftSheet(model: model)
         }
-        .onAppear { if model.ppPort.isEmpty && model.connection == .unknown { showSetup = true } }
+        .sheet(isPresented: $model.askForDiskAccess, onDismiss: askForSetup) {
+            DiskAccessSheet(model: model)
+                .interactiveDismissDisabled()
+        }
+        .onAppear { if !model.askForDiskAccess { askForSetup() } }
         .animation(.smooth, value: model.phase)
         .animation(.smooth, value: model.error)
         .animation(.smooth, value: model.saveState)
+    }
+
+    private func askForSetup() {
+        if model.ppPort.isEmpty && model.connection == .unknown { showSetup = true }
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
@@ -931,6 +939,7 @@ struct SettingsView: View {
     @Bindable var model: AppModel
     var isFirstRun = false
     @Environment(\.dismiss) private var dismiss
+    @State private var diskAccess = DiskAccess.granted
 
     var body: some View {
         Form {
@@ -946,6 +955,21 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
             if !isFirstRun {
+                Section {
+                    LabeledContent("Full Disk Access") {
+                        if diskAccess {
+                            Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else {
+                            Button("Turn On…") { DiskAccess.openSettings() }
+                        }
+                    }
+                } header: {
+                    Text("Prime Library")
+                } footer: {
+                    Text("Prime keeps its library in its own private folder. Without Full Disk Access, macOS asks "
+                         + "you to Allow opening it every time this app starts.")
+                        .foregroundStyle(.secondary)
+                }
                 Section {
                     Stepper(value: $model.leadSeconds, in: 0...2, step: 0.1) {
                         LabeledContent("Fire cues early by", value: String(format: "%.1f seconds", model.leadSeconds))
@@ -984,6 +1008,9 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            diskAccess = DiskAccess.granted
         }
         .task(id: model.ppHost + ":" + model.ppPort) {
             try? await Task.sleep(for: .milliseconds(400))

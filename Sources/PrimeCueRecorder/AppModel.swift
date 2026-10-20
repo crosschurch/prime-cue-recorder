@@ -20,6 +20,8 @@ final class AppModel {
     var connection = Connection.unknown
     var saveState = SaveState.idle { didSet { updateBusy() } }
     var error: String?
+    /// Showing the Full Disk Access onboarding; Prime's library isn't read until it's done.
+    var askForDiskAccess = false
 
     // Settings
     var ppHost: String { didSet { defaults.set(ppHost, forKey: "ppHost") } }
@@ -87,8 +89,19 @@ final class AppModel {
         #if DEBUG
         if let demo = ProcessInfo.processInfo.environment["PCR_DEMO"] { loadDemo(demo); return }
         #endif
-        loadLibrary()
+        if DiskAccess.granted || defaults.bool(forKey: "skippedDiskAccess") {
+            loadLibrary()
+        } else {
+            askForDiskAccess = true
+        }
         if !ppPort.isEmpty { Task { await connect() } }
+    }
+
+    /// Skipping is remembered: macOS's own prompt asks every launch after that, and Settings can turn it on.
+    func finishDiskAccess(skipped: Bool) {
+        if skipped { defaults.set(true, forKey: "skippedDiskAccess") }
+        askForDiskAccess = false
+        loadLibrary()
     }
 
     var plan: CuePlan? {
