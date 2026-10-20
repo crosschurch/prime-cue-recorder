@@ -58,6 +58,7 @@ extension AppModel {
             return SlideClick(time: 2.4 + beat / bps, slide: i + 2, group: l.0, text: l.1)
         }
         presentationName = "Goodness of God"
+        recordedSlides = [("Intro", "")] + lines.map { ($0.0, $0.1) } + [("Interlude", "")]
         recordingStartedAt = Date().addingTimeInterval(-41)
         // `swift run` launches a bare executable, which macOS treats as a background tool.
         NSApplication.shared.setActivationPolicy(.regular)
@@ -71,6 +72,10 @@ extension AppModel {
         case "recording": self.phase = .recording
         case "review":
             clicks[4].nudge = 0.5
+            // Slide 8 clicked too soon, back to 7, then 8 again.
+            let seven = clicks[5].time
+            clicks.insert(SlideClick(time: seven + 1, slide: 8, group: "Chorus", text: lines[6].1), at: 6)
+            clicks.insert(SlideClick(time: seven + 2, slide: 7, group: "Chorus", text: lines[5].1), at: 7)
             self.phase = .review
         case "waiting": saveState = .waitingForPrime
         case "shift":
@@ -86,7 +91,7 @@ extension AppModel {
             } + [SavedCue(id: "x", velocity: 12, sectionId: "3", progress: 0.9)]
             savedSlides = [("Intro", "")] + clicks.map { ($0.group, $0.text) } + [("Interlude", "")]
             songs[1] = SetlistSong(id: "v", name: "Goodness of God", versionName: "", lyricCues: 11, isActive: true)
-            cueEdits = ["v": ["x": 1, "3": -0.5]]
+            cueEdits = ["v": ["x": CueEdit(nudge: 1), "3": CueEdit(nudge: -0.5)]]
             clicks = []
         case "access":
             clicks = []

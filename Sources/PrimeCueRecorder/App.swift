@@ -490,23 +490,29 @@ private struct RecordingView: View {
                 ContentUnavailableView("Waiting for the First Slide", systemImage: "cursorarrow.click.2",
                                        description: Text("Slides you click in ProPresenter show up here."))
             } else {
-                // Like a chat: the newest slide comes in at the bottom and the list follows it.
+                // Like a chat: the newest slide comes in at the bottom and the list follows it, all
+                // of it, down to a marker under the last row.
                 ScrollViewReader { proxy in
-                    List {
-                        ForEach(Array(model.clicks.enumerated()), id: \.offset) { i, click in
-                            SlideRow(slide: click.slide, group: click.group, text: click.text,
-                                     trailing: String(format: "%.1fs", click.time))
-                                .opacity(i == model.clicks.count - 1 ? 1 : 0.75)
-                                .id(i)
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(model.clicks.enumerated()), id: \.offset) { i, click in
+                                SlideRow(slide: click.slide, group: click.group, text: click.text,
+                                         trailing: String(format: "%.1fs", click.time))
+                                    .padding(.horizontal, 8)
+                                    .opacity(i == model.clicks.count - 1 ? 1 : 0.75)
+                                if i < model.clicks.count - 1 { Divider().padding(.leading, 48) }
+                            }
+                            Color.clear.frame(height: 1).id("end")
                         }
+                        .padding(10)
                     }
                     .defaultScrollAnchor(.bottom)
                     .onChange(of: model.clicks.count) {
-                        withAnimation(.snappy) { proxy.scrollTo(model.clicks.count - 1, anchor: .bottom) }
+                        Task { @MainActor in
+                            withAnimation(.snappy) { proxy.scrollTo("end", anchor: .bottom) }
+                        }
                     }
                 }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .glassCard(shape: RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
@@ -519,13 +525,32 @@ private struct RecordingView: View {
 
 private struct ReviewView: View {
     @Bindable var model: AppModel
-    @State private var selected: Int?
-    static let step = 0.25
+    @State private var selected: String?
 
-    private func nudgeSelected(by seconds: Double) -> KeyPress.Result {
-        guard let selected else { return .ignored }
-        model.nudge(click: selected, by: seconds)
-        return .handled
+    /// Kept cues, plus clicks removed or left out as taken back, so they can be put back.
+    private func rows(_ plan: CuePlan) -> [CueListRow] {
+        let cues = Dictionary(plan.cues.map { ($0.click, $0) }, uniquingKeysWith: { a, _ in a })
+        let takenBack = Set(CueEngine.cleaned(model.clicks).takenBack)
+        return model.clicks.indices.compactMap { i in
+            let click = model.clicks[i]
+            if let cue = cues[i] {
+                return CueListRow(id: "\(i)", slide: cue.slide, group: pretty(cue.sectionType), text: cue.text,
+                                  trailing: cue.time.map { clock($0) } ?? String(format: "beat %.2f", cue.beat),
+                                  nudge: click.nudge, status: click.edited ? "Edited" : nil)
+            }
+            guard click.removed || takenBack.contains(i) else { return nil }
+            return CueListRow(id: "\(i)", slide: click.slide, group: click.group, text: click.text, trailing: "",
+                              status: click.removed ? "Removed" : "Clicked early, taken back", isOut: true)
+        }
+    }
+
+    private var actions: CueActions {
+        CueActions(
+            nudge: { id, s in Int(id).map { model.nudge(click: $0, by: s) } },
+            resetNudge: { id in Int(id).map { model.resetNudge(click: $0) } },
+            setSlide: { id, n in Int(id).map { model.setSlide(click: $0, to: n) } },
+            add: { id in Int(id).flatMap { model.addClick(after: $0) }.map { "\($0)" } },
+            toggleRemove: { id in Int(id).map { model.toggleRemove(click: $0) } })
     }
 
     var body: some View {
@@ -559,29 +584,17 @@ private struct ReviewView: View {
                         .glassCard(tint: .orange, shape: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
 
-                BulkMoveBar(count: { group in model.clicks.filter { group.contains(group: $0.group, text: $0.text) }.count },
+                BulkMoveBar(count: { group in
+                                plan.cues.filter { group.contains(group: model.clicks[$0.click].group, text: $0.text) }.count
+                            },
                             apply: { model.nudge($0, by: $1) })
 
-                List(plan.cues, id: \.click, selection: $selected) { cue in
-                    let nudge = model.clicks.indices.contains(cue.click) ? model.clicks[cue.click].nudge : 0
-                    SlideRow(slide: cue.slide, group: pretty(cue.sectionType), text: cue.text,
-                             trailing: cue.time.map { clock($0) } ?? String(format: "beat %.2f", cue.beat),
-                             nudge: nudge) {
-                        if selected == cue.click {
-                            NudgeControls(nudge: nudge,
-                                          move: { model.nudge(click: cue.click, by: $0) },
-                                          reset: { model.resetNudge(click: cue.click) })
-                        }
-                    }
-                }
-                .onKeyPress(.leftArrow) { nudgeSelected(by: -Self.step) }
-                .onKeyPress(.rightArrow) { nudgeSelected(by: Self.step) }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .glassCard(shape: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                CueList(rows: rows(plan), selected: $selected, slideCount: model.recordedSlides?.count,
+                        actions: actions, scrolls: true)
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .glassCard(shape: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-                Text("Select a slide to move its cue: − and + (or ← and →) move it a quarter second.")
+                Text("Click a slide to change it: ← → move it a quarter second, ↑ ↓ pick another, Delete removes it.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -658,40 +671,31 @@ private struct SavedCuesCard: View {
 
     var body: some View {
         let rows = model.savedRows
-        let moved = rows.filter { $0.nudge != 0 }.count
+        let changed = rows.filter { !$0.edit.isEmpty }.count
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Label("Saved Cues", systemImage: "slider.horizontal.below.rectangle").font(.headline)
                 Spacer()
-                if moved > 0 {
-                    Text("\(moved) moved, not saved yet").foregroundStyle(.orange)
+                if changed > 0 {
+                    Text("\(changed) changed, not saved yet").foregroundStyle(.orange)
                     Button("Reset") { model.resetSaved() }.glassButton()
                 }
             }
             Text(caption).font(.callout).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            BulkMoveBar(count: { group in rows.filter { group.contains(group: $0.group, text: $0.text ?? "-") }.count },
+            BulkMoveBar(count: { group in
+                            rows.filter { !$0.edit.removed && group.contains(group: $0.group, text: $0.text ?? "-") }.count
+                        },
                         apply: { model.nudgeSaved($0, by: $1) },
                         canPickGroup: model.savedSlides != nil)
-            VStack(spacing: 0) {
-                ForEach(rows) { row in
-                    SlideRow(slide: row.slide, group: row.group, text: row.text ?? "Slide \(row.slide)",
-                             trailing: row.newTime.map { clock($0) } ?? "", nudge: row.nudge) {
-                        if selected == row.id {
-                            NudgeControls(nudge: row.nudge,
-                                          move: { model.nudgeSaved([row.id], by: $0) },
-                                          reset: { model.resetSaved(row.id) })
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .background(selected == row.id ? AnyShapeStyle(.tint.opacity(0.14)) : AnyShapeStyle(.clear),
-                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .contentShape(Rectangle())
-                    .onTapGesture { selected = selected == row.id ? nil : row.id }
-                    if row.id != rows.last?.id { Divider().padding(.leading, 48) }
-                }
-            }
-            if moved > 0 {
+            CueList(rows: rows.map(listRow), selected: $selected, slideCount: model.savedSlides?.count,
+                    actions: CueActions(
+                        nudge: { model.nudgeSaved([$0], by: $1) },
+                        resetNudge: { model.resetSaved($0) },
+                        setSlide: { model.setSavedSlide($0, to: $1) },
+                        add: { model.addSaved(after: $0) },
+                        toggleRemove: { model.toggleRemoveSaved($0) }))
+            if changed > 0 {
                 HStack {
                     Spacer()
                     Button("Save to Prime", systemImage: "square.and.arrow.down") { model.save() }
@@ -702,25 +706,23 @@ private struct SavedCuesCard: View {
         }
         .padding(18)
         .glassCard(shape: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .focusable()
-        .focusEffectDisabled()
-        .onKeyPress(.leftArrow) { nudgeSelected(by: -ReviewView.step) }
-        .onKeyPress(.rightArrow) { nudgeSelected(by: ReviewView.step) }
         .onChange(of: model.versionId) { selected = nil }
     }
 
+    private func listRow(_ row: AppModel.SavedRow) -> CueListRow {
+        let edit = row.edit
+        let status = edit.added != nil ? "New" : edit.removed ? "Removed" : edit.slide != nil ? "Renumbered" : nil
+        return CueListRow(id: row.id, slide: row.slide, group: row.group, text: row.text ?? "Slide \(row.slide)",
+                          trailing: row.newTime.map { clock($0) } ?? "", nudge: edit.nudge,
+                          status: status, isOut: edit.removed)
+    }
+
     private var caption: String {
-        let base = "Where each slide fires in the song. Click a slide to move just that one, or move a group "
-            + "at once. Changes are written when you save."
+        let base = "Where each slide fires in the song. Click a slide to move, renumber or remove it, or add "
+            + "the next slide after it. Move a group at once below. Changes are written when you save."
         return model.savedSlides == nil
             ? base + " Connect to ProPresenter and pick this song's playlist item to see each slide's words."
             : base
-    }
-
-    private func nudgeSelected(by seconds: Double) -> KeyPress.Result {
-        guard let selected else { return .ignored }
-        model.nudgeSaved([selected], by: seconds)
-        return .handled
     }
 }
 
@@ -772,13 +774,12 @@ private struct RecordButton: View {
     }
 }
 
-private struct SlideRow<Accessory: View>: View {
+/// A slide in the list while recording.
+private struct SlideRow: View {
     let slide: Int
     let group: String
     let text: String
     let trailing: String
-    var nudge: Double = 0
-    @ViewBuilder var accessory: Accessory
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -794,44 +795,9 @@ private struct SlideRow<Accessory: View>: View {
                 }
             }
             Spacer()
-            accessory
-            if nudge != 0 {
-                Text(nudge.formatted(.number.precision(.fractionLength(0...2)).sign(strategy: .always())) + "s")
-                    .font(.caption.weight(.semibold)).monospacedDigit()
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(.orange.opacity(0.2), in: Capsule())
-                    .help("Fires \(abs(nudge).formatted()) s \(nudge > 0 ? "later" : "earlier") than you clicked")
-            }
             Text(trailing).font(.callout).monospacedDigit().foregroundStyle(.secondary)
         }
-        .padding(.vertical, 3)
-    }
-}
-
-extension SlideRow where Accessory == EmptyView {
-    init(slide: Int, group: String, text: String, trailing: String) {
-        self.init(slide: slide, group: group, text: text, trailing: trailing) { EmptyView() }
-    }
-}
-
-/// − / + for one cue in the review list.
-private struct NudgeControls: View {
-    let nudge: Double
-    let move: (Double) -> Void
-    let reset: () -> Void
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Button { move(-ReviewView.step) } label: { Image(systemName: "minus") }
-                .help("Earlier")
-            Button { move(ReviewView.step) } label: { Image(systemName: "plus") }
-                .help("Later")
-            if nudge != 0 {
-                Button("Reset", action: reset)
-            }
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+        .padding(.vertical, 6)
     }
 }
 
@@ -1075,10 +1041,6 @@ extension View {
     }
 }
 
-private func firstLine(_ text: String) -> String {
-    let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-    return line.isEmpty ? "Blank" : line
-}
 
 /// 83.4 -> "1:23.4"
 private func clock(_ seconds: Double, tenths: Bool = true) -> String {

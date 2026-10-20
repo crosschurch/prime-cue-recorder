@@ -55,6 +55,22 @@ public struct CueWrite: Sendable {
     }
 }
 
+/// Changes to one song's saved lyric cues, written by `PrimeDB.edit`.
+public struct CueChanges: Sendable {
+    /// cue id -> new position
+    public var moves: [String: (sectionId: String, progress: Double)] = [:]
+    /// cue id -> new slide number
+    public var velocities: [String: Int] = [:]
+    public var removed: Set<String> = []
+    public var added: [(velocity: Int, sectionId: String, progress: Double)] = []
+    /// MIDI channel for added cues
+    public var channel = 0
+
+    public init(moves: [String: (sectionId: String, progress: Double)] = [:]) { self.moves = moves }
+
+    public var isEmpty: Bool { moves.isEmpty && velocities.isEmpty && removed.isEmpty && added.isEmpty }
+}
+
 /// A cue already saved in Prime.
 public struct SavedCue: Equatable, Sendable {
     public let id: String
@@ -282,31 +298,70 @@ public final class PrimeDB {
     }
 
     /// Moves saved cues in place, keeping everything else about them (id, channel, velocity).
-    /// `moves` is versionId -> cue id -> new position. Edits only those cues' two fields inside
-    /// SQLite, so every other cue stays byte-for-byte the same. Backs up first, one transaction.
+    /// `moves` is versionId -> cue id -> new position.
     @discardableResult
     public func move(_ moves: [String: [String: (sectionId: String, progress: Double)]],
                      lyricNote: Int = CueNotes().lyric) throws -> URL {
-        let backup = try modify(label: "pre-shift") { db in
-            for (versionId, positions) in moves {
+        try edit(moves.mapValues { CueChanges(moves: $0) }, lyricNote: lyricNote, label: "pre-shift")
+    }
+
+    /// Edits saved lyric cues in place: moves, new slide numbers, removals and additions, by
+    /// version id. Only the touched cues' fields change inside SQLite, so every other cue stays
+    /// byte-for-byte the same. Backs up first, one transaction.
+    @discardableResult
+    public func edit(_ changes: [String: CueChanges], lyricNote: Int = CueNotes().lyric,
+                     label: String = "pre-edit") throws -> URL {
+        let backup = try modify(label: label) { db in
+            var nextId = 100_000 + (Int(try query(db, """
+                SELECT max(CAST(json_extract(j.value, '$.id') AS INTEGER))
+                FROM multitrackVersion v, json_each(v.midiCues) j
+                """).first?[0] ?? "") ?? 0)
+            for (versionId, change) in changes {
                 let rows = try query(db, """
                     SELECT j.key, CAST(json_extract(j.value, '$.id') AS TEXT)
                     FROM multitrackVersion v, json_each(v.midiCues) j
                     WHERE v.localId = ? AND json_extract(j.value, '$.bus') = '\(Self.bus)'
                       AND json_extract(j.value, '$.noteNumber') = \(lyricNote)
                     """, [versionId])
+                var removals: [Int] = []
                 for row in rows {
-                    guard let index = row[0].flatMap(Int.init), let id = row[1], let to = positions[id] else { continue }
-                    try exec(db, """
-                        UPDATE multitrackVersion
-                        SET midiCues = json_set(midiCues, '$[\(index)].multitrackSectionId', ?,
-                                                '$[\(index)].sectionProgress', json(?))
-                        WHERE localId = ? AND json_extract(midiCues, '$[\(index)].id') IS NOT NULL
-                        """, [to.sectionId, String(to.progress), versionId])
+                    guard let index = row[0].flatMap(Int.init), let id = row[1] else { continue }
+                    if change.removed.contains(id) { removals.append(index); continue }
+                    if let to = change.moves[id] {
+                        try exec(db, """
+                            UPDATE multitrackVersion
+                            SET midiCues = json_set(midiCues, '$[\(index)].multitrackSectionId', ?,
+                                                    '$[\(index)].sectionProgress', json(?))
+                            WHERE localId = ? AND json_extract(midiCues, '$[\(index)].id') IS NOT NULL
+                            """, [to.sectionId, String(to.progress), versionId])
+                    }
+                    if let velocity = change.velocities[id] {
+                        try exec(db, """
+                            UPDATE multitrackVersion SET midiCues = json_set(midiCues, '$[\(index)].noteVelocity', json(?))
+                            WHERE localId = ? AND json_extract(midiCues, '$[\(index)].id') IS NOT NULL
+                            """, [String(velocity), versionId])
+                    }
+                }
+                // Highest index first, so the ones still to go keep their places.
+                for index in removals.sorted(by: >) {
+                    try exec(db, "UPDATE multitrackVersion SET midiCues = json_remove(midiCues, '$[\(index)]') WHERE localId = ?",
+                             [versionId])
+                }
+                for cue in change.added {
+                    let json: [String: Any] = [
+                        "bus": Self.bus, "channel": change.channel, "id": String(nextId),
+                        "isMigratedToBus": true, "messageType": ["noteOn": [String: Any]()],
+                        "multitrackSectionId": cue.sectionId, "noteNumber": lyricNote,
+                        "noteVelocity": cue.velocity, "sectionProgress": cue.progress,
+                    ]
+                    let text = String(data: try JSONSerialization.data(withJSONObject: json), encoding: .utf8) ?? "{}"
+                    try exec(db, "UPDATE multitrackVersion SET midiCues = json_insert(midiCues, '$[#]', json(?)) WHERE localId = ?",
+                             [text, versionId])
+                    nextId += 1
                 }
             }
         }
-        for versionId in moves.keys {
+        for versionId in changes.keys {
             guard let song = try? song(versionId: versionId),
                   let saved = try? cues(versionId: versionId, note: lyricNote) else { continue }
             try? saveBaseline(song: song, cues: saved.map { ($0.velocity, $0.sectionId, $0.progress) })

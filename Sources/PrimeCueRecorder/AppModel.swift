@@ -56,6 +56,8 @@ final class AppModel {
     // Recording
     var clicks: [SlideClick] = []
     var presentationName: String?
+    /// The recorded presentation's slides, for renumbering or adding a slide on the review screen.
+    var recordedSlides: [(group: String, text: String)]?
     private(set) var otherPresentationClicks = 0
     var recordingStartedAt: Date?
     /// Songs without sections: where the first recorded slide lands, in seconds into the song.
@@ -68,8 +70,8 @@ final class AppModel {
     var savedCues: [SavedCue] = []
     /// The song's slides in ProPresenter, by slide number - 1; nil until read (needs the playlist item).
     var savedSlides: [(group: String, text: String)]?
-    /// Moves waiting to be saved: Prime version id -> cue id -> seconds (> 0 is later).
-    var cueEdits: [String: [String: Double]] = [:]
+    /// Edits waiting to be saved: Prime version id -> cue id -> edit.
+    var cueEdits: [String: [String: CueEdit]] = [:]
     var showShift = false
     #if DEBUG
     var demoShiftPreview: ShiftPreview?
@@ -156,7 +158,7 @@ final class AppModel {
 
     /// Songs with saved cues moved but not written yet (a new recording replaces them instead).
     var editedSongs: [String] {
-        cueEdits.filter { !$0.value.isEmpty && pendingLyrics[$0.key] == nil }.map(\.key)
+        cueEdits.filter { $0.value.values.contains { !$0.isEmpty } && pendingLyrics[$0.key] == nil }.map(\.key)
     }
 
     var nextSongNeedingLyrics: SetlistSong? {
@@ -214,7 +216,7 @@ final class AppModel {
         if self.versionId == versionId, let presentation { savedSlides = presentation.slides }
     }
 
-    // MARK: Moving saved lyric cues
+    // MARK: Editing saved lyric cues
 
     struct SavedRow: Identifiable {
         let id: String
@@ -222,49 +224,83 @@ final class AppModel {
         let group: String       // ProPresenter group, else Prime's section
         let text: String?       // nil when ProPresenter isn't connected
         let time: Double?       // where it fires now
-        let nudge: Double
+        let edit: CueEdit
         let newTime: Double?    // where it will fire once saved
-
-        var isInstrumental: Bool { CueGroup.isInstrumental(group: group, text: text ?? "-") }
     }
 
     var savedRows: [SavedRow] {
         guard let song else { return [] }
         let edits = cueEdits[song.versionId] ?? [:]
         let types = Dictionary(song.sections.map { ($0.id, $0.type) }, uniquingKeysWith: { a, _ in a })
-        return savedCues.map { cue in
-            let slide = savedSlides.flatMap { $0.indices.contains(cue.velocity - 1) ? $0[cue.velocity - 1] : nil }
-            let nudge = edits[cue.id] ?? 0
-            let time = CueShift.seconds(sectionId: cue.sectionId, progress: cue.progress, in: song)
-            var newTime = time
-            if nudge != 0 {
-                let moved = CueShift.shift([cue], in: song, by: nudge).moves[cue.id]
-                newTime = moved.flatMap { CueShift.seconds(sectionId: $0.sectionId, progress: $0.progress, in: song) } ?? time
+        return (savedCues + edits.values.compactMap(\.added)).map { cue in
+            let edit = edits[cue.id] ?? CueEdit()
+            let number = edit.slide ?? cue.velocity
+            let slide = savedSlides.flatMap { $0.indices.contains(number - 1) ? $0[number - 1] : nil }
+            let base = CueShift.seconds(sectionId: cue.sectionId, progress: cue.progress, in: song)
+            let move = edit.offset + edit.nudge
+            var newTime = base
+            if move != 0 {
+                let moved = CueShift.shift([cue], in: song, by: move).moves[cue.id]
+                newTime = moved.flatMap { CueShift.seconds(sectionId: $0.sectionId, progress: $0.progress, in: song) } ?? base
             }
-            return SavedRow(id: cue.id, slide: cue.velocity,
+            return SavedRow(id: cue.id, slide: number,
                             group: slide?.group ?? types[cue.sectionId].map(prettySection) ?? "",
-                            text: slide?.text, time: time, nudge: nudge, newTime: newTime)
+                            text: slide?.text, time: edit.added == nil ? base : nil, edit: edit, newTime: newTime)
         }
-        .sorted { ($0.time ?? 0, $0.slide) < ($1.time ?? 0, $1.slide) }
+        .sorted { ($0.newTime ?? 0, $0.slide) < ($1.newTime ?? 0, $1.slide) }
+    }
+
+    private func editSaved(_ cueId: String, _ change: (inout CueEdit) -> Void) {
+        guard let versionId = song?.versionId else { return }
+        var edit = cueEdits[versionId]?[cueId] ?? CueEdit()
+        change(&edit)
+        cueEdits[versionId, default: [:]][cueId] = edit.isEmpty ? nil : edit
     }
 
     func nudgeSaved(_ cueIds: [String], by seconds: Double) {
-        guard let versionId = song?.versionId else { return }
-        var edits = cueEdits[versionId] ?? [:]
-        for id in cueIds {
-            let value = (((edits[id] ?? 0) + seconds) * 100).rounded() / 100
-            edits[id] = value == 0 ? nil : value
-        }
-        cueEdits[versionId] = edits
+        for id in cueIds { editSaved(id) { $0.nudge = (($0.nudge + seconds) * 100).rounded() / 100 } }
     }
 
     func nudgeSaved(_ group: CueGroup, by seconds: Double) {
-        nudgeSaved(savedRows.filter { group.contains(group: $0.group, text: $0.text ?? "-") }.map(\.id), by: seconds)
+        nudgeSaved(savedRows.filter { !$0.edit.removed && group.contains(group: $0.group, text: $0.text ?? "-") }
+            .map(\.id), by: seconds)
     }
 
+    /// One cue's move back to zero, or every edit to the song.
     func resetSaved(_ cueId: String? = nil) {
         guard let versionId = song?.versionId else { return }
-        if let cueId { cueEdits[versionId]?[cueId] = nil } else { cueEdits[versionId] = nil }
+        if let cueId { editSaved(cueId) { $0.nudge = 0 } } else { cueEdits[versionId] = nil }
+    }
+
+    func setSavedSlide(_ cueId: String, to slide: Int) {
+        let original = (savedCues + (cueEdits[song?.versionId ?? ""]?.values.compactMap(\.added) ?? []))
+            .first { $0.id == cueId }?.velocity
+        editSaved(cueId) { $0.slide = slide == original ? nil : slide }
+    }
+
+    /// Removes a saved cue when saving, or takes it back; a cue added here just goes.
+    func toggleRemoveSaved(_ cueId: String) {
+        guard let versionId = song?.versionId else { return }
+        if cueEdits[versionId]?[cueId]?.added != nil { cueEdits[versionId]?[cueId] = nil; return }
+        editSaved(cueId) { $0.removed.toggle() }
+    }
+
+    /// Adds a cue for the next slide halfway to the following cue (2 s later if it's the last).
+    /// Returns its id, to select it.
+    @discardableResult
+    func addSaved(after cueId: String) -> String? {
+        let rows = savedRows.filter { !$0.edit.removed }
+        guard let i = rows.firstIndex(where: { $0.id == cueId }), let time = rows[i].newTime,
+              let base = (savedCues + (cueEdits[song?.versionId ?? ""]?.values.compactMap(\.added) ?? []))
+                .first(where: { $0.id == cueId }) else { return nil }
+        let gap = i + 1 < rows.count ? ((rows[i + 1].newTime ?? time + 4) - time) / 2 : 2
+        let id = "new-" + UUID().uuidString
+        let source = cueEdits[song?.versionId ?? ""]?[cueId]
+        editSaved(id) {
+            $0.added = SavedCue(id: id, velocity: rows[i].slide + 1, sectionId: base.sectionId, progress: base.progress)
+            $0.offset = (source?.offset ?? 0) + (source?.nudge ?? 0) + (gap * 100).rounded() / 100
+        }
+        return id
     }
 
     /// Recorded slides in `group`, moved together on the review screen.
@@ -322,6 +358,7 @@ final class AppModel {
         clicks = []
         firstSlideAt = nil
         presentationName = nil
+        recordedSlides = nil
         otherPresentationClicks = 0
         error = nil
         saveState = .idle
@@ -350,6 +387,7 @@ final class AppModel {
                         if presentationId == nil {
                             presentationId = current.uuid
                             presentationName = current.name
+                            recordedSlides = presentations[current.uuid]?.slides
                         }
                         if current.uuid == presentationId {
                             let slides = presentations[current.uuid]?.slides ?? []
@@ -379,6 +417,41 @@ final class AppModel {
         recordTask?.cancel()
         recordTask = nil
         phase = clicks.isEmpty ? .ready : .review
+    }
+
+    /// Takes a recorded slide out, or puts it back (also one left out as taken back).
+    func toggleRemove(click: Int) {
+        guard clicks.indices.contains(click) else { return }
+        if clicks[click].removed { clicks[click].removed = false; return }
+        if !CueEngine.cleaned(clicks).kept.contains(click) { clicks[click].edited = true; return }
+        clicks[click].removed = true
+    }
+
+    /// Changes which slide a recorded click fires, with its words when the slides are known.
+    func setSlide(click: Int, to slide: Int) {
+        guard clicks.indices.contains(click), slide >= 1 else { return }
+        clicks[click].slide = slide
+        clicks[click].edited = true
+        if let s = recordedSlides, s.indices.contains(slide - 1) {
+            clicks[click].group = s[slide - 1].group
+            clicks[click].text = s[slide - 1].text
+        }
+    }
+
+    /// Adds the next slide halfway to the following click (2 s later if it's the last). Returns its index.
+    @discardableResult
+    func addClick(after click: Int) -> Int? {
+        guard clicks.indices.contains(click) else { return nil }
+        let base = clicks[click]
+        let next = clicks[(click + 1)...].first { !$0.removed }
+        let time = next.map { (base.time + $0.time) / 2 } ?? base.time + 2
+        let number = base.slide + 1
+        let slide = recordedSlides.flatMap { $0.indices.contains(number - 1) ? $0[number - 1] : nil }
+        var added = SlideClick(time: time, slide: number, group: slide?.group ?? base.group, text: slide?.text ?? "")
+        added.nudge = base.nudge
+        added.edited = true
+        clicks.insert(added, at: click + 1)
+        return click + 1
     }
 
     /// Moves one recorded slide's cue later (> 0) or earlier, e.g. an Interlude clicked too soon.
@@ -534,19 +607,34 @@ final class AppModel {
                                            .map { ($0.slide, $0.sectionId, $0.progress) }))
             }
             if !writes.isEmpty { try db.write(writes, lyricNote: notes.lyric) }
-            var moves: [String: [String: (sectionId: String, progress: Double)]] = [:]
+            var changes: [String: CueChanges] = [:]
             for id in editedSongs {
                 let song = try db.song(versionId: id)
-                for cue in try db.cues(versionId: id, note: notes.lyric) {
-                    guard let seconds = cueEdits[id]?[cue.id],
-                          let moved = CueShift.shift([cue], in: song, by: seconds).moves[cue.id] else { continue }
-                    moves[id, default: [:]][cue.id] = moved
+                let saved = Dictionary(try db.cues(versionId: id, note: notes.lyric).map { ($0.id, $0) },
+                                       uniquingKeysWith: { a, _ in a })
+                var change = CueChanges()
+                change.channel = notes.channel
+                for (cueId, edit) in cueEdits[id] ?? [:] {
+                    if let added = edit.added {
+                        let move = edit.offset + edit.nudge
+                        let at = CueShift.shift([added], in: song, by: move).moves[added.id]
+                            ?? (added.sectionId, added.progress)
+                        change.added.append((edit.slide ?? added.velocity, at.sectionId, at.progress))
+                        continue
+                    }
+                    guard let cue = saved[cueId] else { continue }
+                    if edit.removed { change.removed.insert(cueId); continue }
+                    if edit.nudge != 0, let moved = CueShift.shift([cue], in: song, by: edit.nudge).moves[cueId] {
+                        change.moves[cueId] = moved
+                    }
+                    if let slide = edit.slide { change.velocities[cueId] = slide }
                 }
+                if !change.isEmpty { changes[id] = change }
             }
-            if !moves.isEmpty { try db.move(moves, lyricNote: notes.lyric) }
+            if !changes.isEmpty { try db.edit(changes, lyricNote: notes.lyric) }
             let playlistCount = playlistChanges.count
             let lyricSongs = pendingLyrics.count
-            let movedSongs = moves.count
+            let movedSongs = changes.count
             pendingLyrics = [:]
             cueEdits = [:]
             loadSongs()
@@ -554,7 +642,7 @@ final class AppModel {
             var parts: [String] = []
             if playlistCount > 0 { parts.append("\(playlistCount) playlist cue\(playlistCount == 1 ? "" : "s")") }
             if lyricSongs > 0 { parts.append("lyrics for \(lyricSongs) song\(lyricSongs == 1 ? "" : "s")") }
-            if movedSongs > 0 { parts.append("moved cues in \(movedSongs) song\(movedSongs == 1 ? "" : "s")") }
+            if movedSongs > 0 { parts.append("changed cues in \(movedSongs) song\(movedSongs == 1 ? "" : "s")") }
             saveState = .saved("Saved " + parts.joined(separator: " and ")
                                + ". Open Prime, check the songs, then save them to the cloud.")
         } catch {
@@ -567,4 +655,18 @@ final class AppModel {
 /// "verse_1" -> "Verse 1"
 func prettySection(_ type: String) -> String {
     type.replacingOccurrences(of: "_", with: " ").capitalized
+}
+
+/// A change to a saved lyric cue, waiting for Save to Prime.
+struct CueEdit: Equatable {
+    /// Seconds to move it; > 0 is later.
+    var nudge = 0.0
+    /// A new slide number.
+    var slide: Int?
+    var removed = false
+    /// A cue added here, placed at this position plus `offset` (and `nudge`) seconds.
+    var added: SavedCue?
+    var offset = 0.0
+
+    var isEmpty: Bool { nudge == 0 && slide == nil && !removed && added == nil }
 }

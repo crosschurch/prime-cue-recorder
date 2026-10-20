@@ -49,6 +49,17 @@ final class CueEngineTests: XCTestCase {
         XCTAssertEqual(plan.warnings.count, 1)
     }
 
+    func testOneLateSectionChangeDoesNotDragTheRest() {
+        let outro2 = PrimeSection(id: "o", type: "outro", startBeat: 56, endBeat: 72)
+        // Verse 2 clicked 6 beats late; the other three section changes are right on.
+        let clicks = [click(10, 2, "Verse 1"), click(26, 3, "Chorus"), click(48, 4, "Verse 2"), click(58, 5, "Outro")]
+        let plan = CueEngine.plan(clicks: clicks, arrangement: [intro, verse, chorus, verse2, outro2],
+                                  tempo: 120, leadSeconds: 0)
+        XCTAssertEqual(plan.anchors, 3)
+        XCTAssertEqual(plan.fitError ?? 99, 0, accuracy: 0.001)
+        XCTAssertEqual(plan.cues.map(\.beat), [8, 24, 46, 56])
+    }
+
     func testNoMatchingGroupsWarns() {
         let plan = CueEngine.plan(clicks: [click(8, 1, "Slide")], arrangement: [intro, verse],
                                   tempo: 120, leadSeconds: 1)
@@ -204,6 +215,33 @@ final class CueShiftTests: XCTestCase {
         XCTAssertEqual(r.pinned, 1)
         let unknown = PrimeSong(versionId: "x", name: "x", tempo: 70, sections: [], arrangement: [])
         XCTAssertNotNil(CueShift.shift(cues, in: unknown, by: -0.5).skipped)
+    }
+}
+
+final class SlipTests: XCTestCase {
+    func c(_ time: Double, _ slide: Int) -> SlideClick { SlideClick(time: time, slide: slide, group: "Chorus", text: "x") }
+
+    func testSlideShownEarlyAndTakenBackKeepsTheLaterClick() {
+        // 17, 18 too early, back to 17, then 18 at the right time.
+        let raw = [c(0, 16), c(5, 17), c(8, 18), c(9, 17), c(12, 18), c(16, 19)]
+        let (kept, takenBack) = CueEngine.cleaned(raw)
+        XCTAssertEqual(kept.map { raw[$0].slide }, [16, 17, 18, 19])
+        XCTAssertEqual(kept.map { raw[$0].time }, [0, 5, 12, 16])
+        XCTAssertEqual(takenBack, [2])
+    }
+
+    func testGoingBackAWholeSectionIsKept() {
+        // Back to 17 after 20 seconds: a chorus sung again, not a slip.
+        let raw = [c(0, 17), c(8, 18), c(16, 19), c(24, 20), c(30, 17), c(38, 18)]
+        XCTAssertEqual(CueEngine.cleaned(raw).kept.count, 6)
+    }
+
+    func testRemovedAndEditedClicks() {
+        var raw = [c(0, 1), c(5, 2), c(8, 3), c(12, 4)]
+        raw[1].removed = true
+        raw[3].slide = 2
+        raw[3].edited = true
+        XCTAssertEqual(CueEngine.cleaned(raw).kept, [0, 2, 3])
     }
 }
 

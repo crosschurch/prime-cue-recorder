@@ -106,4 +106,27 @@ final class PrimeDBTests: XCTestCase {
         moved.forEach { print("  " + $0) }
         XCTAssertLessThanOrEqual(moved.count, earlier.pinned + later.pinned)
     }
+
+    func testEditRemovesRenumbersAndAddsOnlyThoseCues() throws {
+        guard let path = ProcessInfo.processInfo.environment["PRIME_TEST_DB"] else {
+            throw XCTSkip("Set PRIME_TEST_DB to a copy of a Prime database")
+        }
+        let db = PrimeDB(url: URL(fileURLWithPath: path),
+                         backupDir: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let id = try XCTUnwrap(db.setlists().lazy.flatMap { try! db.songs(setlistId: $0.id) }.first { $0.lyricCues >= 3 }?.id)
+        let before = try db.cues(versionId: id, note: 19)
+        let others = try [18, 1, 35].map { try db.cues(versionId: id, note: $0) }
+        var change = CueChanges()
+        change.removed = [before[0].id]
+        change.velocities = [before[1].id: 99]
+        change.added = [(77, before[2].sectionId, before[2].progress)]
+        try db.edit([id: change])
+        let after = try db.cues(versionId: id, note: 19)
+        XCTAssertEqual(after.count, before.count)
+        XCTAssertFalse(after.contains { $0.id == before[0].id })
+        XCTAssertEqual(after.first { $0.id == before[1].id }?.velocity, 99)
+        XCTAssertEqual(after.last?.velocity, 77)
+        XCTAssertEqual(after.last?.sectionId, before[2].sectionId)
+        XCTAssertEqual(try [18, 1, 35].map { try db.cues(versionId: id, note: $0) }, others)
+    }
 }

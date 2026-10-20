@@ -16,11 +16,15 @@ public struct PrimeSection: Equatable, Sendable {
 /// A slide change seen in ProPresenter while recording.
 public struct SlideClick: Equatable, Sendable {
     public let time: Double     // seconds since recording started
-    public let slide: Int       // 1-based slide number, which is the MIDI velocity
-    public let group: String    // ProPresenter group name ("Verse 1", "Chorus")
-    public let text: String
+    public var slide: Int       // 1-based slide number, which is the MIDI velocity
+    public var group: String    // ProPresenter group name ("Verse 1", "Chorus")
+    public var text: String
     /// Seconds to move this slide's cue by after recording; > 0 is later.
     public var nudge: Double = 0
+    /// Taken out on the review screen.
+    public var removed = false
+    /// Added or renumbered on the review screen: always kept as is, never treated as a slip.
+    public var edited = false
 
     public init(time: Double, slide: Int, group: String, text: String) {
         self.time = time; self.slide = slide; self.group = group; self.text = text
@@ -100,8 +104,9 @@ public enum CueEngine {
             plan.warnings.append("This song has no sections in Prime.")
             return plan
         }
-        let kept = keptIndices(raw)
+        let (kept, takenBack) = cleaned(raw)
         let clicks = kept.map { raw[$0] }
+        if !takenBack.isEmpty { plan.warnings.append(takenBackNote(takenBack.count)) }
 
         var starts: [Double] = []
         var total = 0.0
@@ -138,6 +143,26 @@ public enum CueEngine {
             guard !matched.isEmpty else { break }
             pairs = matched
             (slope, intercept, slopeRejected) = fit(pairs, nominal: nominal)
+        }
+        // A section change clicked well off the beat (a late click, a slip) shouldn't drag the
+        // rest. Fitting the line without it shows it up: while at least 3 others remain, leave out
+        // the one furthest from the line through the others, if that's more than 4 beats.
+        var off = 0
+        while pairs.count > 3 {
+            let worst = pairs.indices.map { i -> (Int, Double) in
+                var others = pairs
+                others.remove(at: i)
+                let line = fit(others, nominal: nominal)
+                return (i, abs(line.intercept + line.slope * pairs[i].time - pairs[i].beat))
+            }.max { $0.1 < $1.1 }!
+            guard worst.1 > 4 else { break }
+            pairs.remove(at: worst.0)
+            off += 1
+            (slope, intercept, slopeRejected) = fit(pairs, nominal: nominal)
+        }
+        if off > 0 {
+            plan.warnings.append("\(off) section change(s) were clicked well off the beat, so the timing "
+                                 + "follows the other \(pairs.count). Check the slides around them.")
         }
         plan.anchors = pairs.count
         if !pairs.isEmpty {
@@ -192,9 +217,10 @@ public enum CueEngine {
     public static func planByTime(clicks raw: [SlideClick], duration: Double, firstSlideAt: Double?,
                                   leadSeconds: Double) -> CuePlan {
         var plan = CuePlan()
-        let kept = keptIndices(raw)
+        let (kept, takenBack) = cleaned(raw)
         let clicks = kept.map { raw[$0] }
         guard let first = clicks.first, duration > 0 else { return plan }
+        if !takenBack.isEmpty { plan.warnings.append(takenBackNote(takenBack.count)) }
         let offset = (firstSlideAt ?? first.time) - first.time
         var early = 0
         var late = 0
@@ -218,13 +244,42 @@ public enum CueEngine {
         return plan
     }
 
-    /// A slide replaced within 0.6 s was a slip of the finger, not a line.
+    /// The clicks that become cues: see `cleaned`.
     public static func deslip(_ raw: [SlideClick]) -> [SlideClick] {
-        keptIndices(raw).map { raw[$0] }
+        cleaned(raw).kept.map { raw[$0] }
     }
 
-    static func keptIndices(_ raw: [SlideClick]) -> [Int] {
-        raw.indices.filter { $0 + 1 == raw.count || raw[$0 + 1].time - raw[$0].time >= 0.6 }
+    /// Indices of the clicks that become cues, and of those dropped as shown early and taken back. Left out:
+    /// - clicks removed on the review screen;
+    /// - a slide replaced within 0.6 s, a slip of the finger rather than a line;
+    /// - slides shown early and then taken back: 17, 18, back to 17, then 18 again keeps the
+    ///   first 17 and the last 18. Only for a short detour (up to 2 slides, within 10 s), since
+    ///   going back further is more likely a section played again.
+    /// Clicks added or renumbered on the review screen are always kept.
+    public static func cleaned(_ raw: [SlideClick]) -> (kept: [Int], takenBack: [Int]) {
+        let live = raw.indices.filter { !raw[$0].removed }
+        var kept: [Int] = []
+        var takenBack: [Int] = []
+        for (k, i) in live.enumerated() {
+            let c = raw[i]
+            if c.edited { kept.append(i); continue }
+            if k + 1 < live.count, !raw[live[k + 1]].edited, raw[live[k + 1]].time - c.time < 0.6 { continue }
+            if let last = kept.last, c.slide < raw[last].slide,
+               let j = kept.lastIndex(where: { raw[$0].slide == c.slide }),
+               kept.count - 1 - j <= 2, !kept[(j + 1)...].contains(where: { raw[$0].edited }),
+               c.time - raw[kept[j + 1]].time <= 10 {
+                takenBack += kept[(j + 1)...]
+                kept.removeSubrange((j + 1)...)
+                continue
+            }
+            kept.append(i)
+        }
+        return (kept, takenBack)
+    }
+
+    static func takenBackNote(_ n: Int) -> String {
+        (n == 1 ? "Left out 1 slide that was clicked early and then taken back" : "Left out \(n) slides that were clicked early and then taken back")
+            + "; the click after going back is used instead. Select it in the list to put it back."
     }
 
     /// Least-squares line through (time, beat). Keeps the song's tempo when there are too
