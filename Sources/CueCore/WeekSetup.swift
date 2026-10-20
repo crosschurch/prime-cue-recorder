@@ -13,9 +13,13 @@ public struct PPPlaylistItem: Identifiable, Hashable, Sendable {
     public let index: Int          // 0-based position in the playlist, headers included
     public let type: String        // "presentation", "header", "media", …
     public let presentationId: String?
+    /// The arrangement this playlist item plays, which can differ from the presentation's own.
+    public let arrangementId: String?
 
-    public init(id: String, name: String, index: Int, type: String, presentationId: String? = nil) {
+    public init(id: String, name: String, index: Int, type: String, presentationId: String? = nil,
+                arrangementId: String? = nil) {
         self.id = id; self.name = name; self.index = index; self.type = type; self.presentationId = presentationId
+        self.arrangementId = arrangementId
     }
 
     /// The velocity that selects this item: ProPresenter numbers playlist items from 1.

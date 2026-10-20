@@ -40,15 +40,16 @@ public final class ProPresenterClient: @unchecked Sendable {
         return PPSlideIndex(uuid: uuid, name: id["name"] as? String ?? "", index: index)
     }
 
-    public func presentation(uuid: String) async throws -> PPPresentation {
+    /// `arrangement` is the playlist item's arrangement when it has one; otherwise the presentation's current one.
+    public func presentation(uuid: String, arrangement: String? = nil) async throws -> PPPresentation {
         let p = try await get("v1/presentation/\(uuid)")["presentation"] as? [String: Any] ?? [:]
         let id = p["id"] as? [String: Any] ?? [:]
         var groups = p["groups"] as? [[String: Any]] ?? []
-        // Slide numbers count through the current arrangement (Chorus, Verse, Chorus…), not the
+        // Slide numbers count through the arrangement being played (Chorus, Verse, Chorus…), not the
         // list of groups, so a repeated group is in there twice.
         let byId = Dictionary(groups.compactMap { g in (g["uuid"] as? String).map { ($0, g) } },
                               uniquingKeysWith: { a, _ in a })
-        if let current = p["current_arrangement"] as? String,
+        if let current = arrangement ?? p["current_arrangement"] as? String,
            let arrangement = (p["arrangements"] as? [[String: Any]])?.first(where: {
                ($0["id"] as? [String: Any])?["uuid"] as? String == current
            }),
@@ -111,7 +112,8 @@ public final class ProPresenterClient: @unchecked Sendable {
             let info = item["presentation_info"] as? [String: Any]
             return PPPlaylistItem(id: id["uuid"] as? String ?? UUID().uuidString, name: id["name"] as? String ?? "",
                                   index: id["index"] as? Int ?? offset, type: item["type"] as? String ?? "",
-                                  presentationId: info?["presentation_uuid"] as? String)
+                                  presentationId: info?["presentation_uuid"] as? String,
+                                  arrangementId: info?["arrangement_uuid"] as? String)
         }
     }
 

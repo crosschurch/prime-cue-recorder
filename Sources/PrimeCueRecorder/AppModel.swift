@@ -94,7 +94,18 @@ final class AppModel {
         } else {
             askForDiskAccess = true
         }
-        if !ppPort.isEmpty { Task { await connect() } }
+        Task { await keepConnected() }
+    }
+
+    /// ProPresenter may open after this app, or be slow to answer at launch: keep trying until it answers.
+    private func keepConnected() async {
+        while true {
+            switch connection {
+            case .unknown, .failed: if !ppPort.isEmpty && phase != .recording { await connect(quietly: true) }
+            default: break
+            }
+            try? await Task.sleep(for: .seconds(5))
+        }
     }
 
     /// Skipping is remembered: macOS's own prompt asks every launch after that, and Settings can turn it on.
@@ -198,8 +209,8 @@ final class AppModel {
     /// saved cues (which only know their slide number) can show their words.
     func loadSlides() async {
         guard let client, let versionId, let n = itemNumbers[versionId],
-              let uuid = item(number: n)?.presentationId else { return }
-        let presentation = try? await client.presentation(uuid: uuid)
+              let item = item(number: n), let uuid = item.presentationId else { return }
+        let presentation = try? await client.presentation(uuid: uuid, arrangement: item.arrangementId)
         if self.versionId == versionId, let presentation { savedSlides = presentation.slides }
     }
 
@@ -269,9 +280,10 @@ final class AppModel {
         Int(ppPort).flatMap { ProPresenterClient(host: ppHost, port: $0) }
     }
 
-    func connect() async {
+    /// `quietly` keeps the badge as it is while retrying in the background.
+    func connect(quietly: Bool = false) async {
         guard let client else { connection = .failed("Enter ProPresenter's network port."); return }
-        connection = .checking
+        if !quietly || connection == .unknown { connection = .checking }
         do {
             connection = .connected(try await client.version())
             playlists = (try? await client.playlists()) ?? []
@@ -331,7 +343,9 @@ final class AppModel {
                     // The slide already showing when Record was pressed isn't a click.
                     if primed, let current, current != last {
                         if presentations[current.uuid] == nil {
-                            presentations[current.uuid] = try await client.presentation(uuid: current.uuid)
+                            let arrangement = playlistItems.first { $0.presentationId == current.uuid }?.arrangementId
+                            presentations[current.uuid] = try await client.presentation(
+                                uuid: current.uuid, arrangement: arrangement)
                         }
                         if presentationId == nil {
                             presentationId = current.uuid
