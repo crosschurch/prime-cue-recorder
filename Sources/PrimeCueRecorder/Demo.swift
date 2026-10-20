@@ -2,7 +2,7 @@
 import AppKit
 import CueCore
 
-/// PCR_DEMO=ready|recording|review|edit|waiting|saved|shift|access swift run (add -clock for a song without sections) — sample data for checking the UI
+/// PCR_DEMO=ready|recording|review|edit|waiting|saved|shift|access|update swift run (add -clock for a song without sections) — sample data for checking the UI
 /// without ProPresenter or a Prime library.
 extension AppModel {
     func loadDemo(_ demo: String) {
@@ -91,6 +91,10 @@ extension AppModel {
         case "access":
             clicks = []
             askForDiskAccess = true
+        case "update":
+            clicks = []
+            Updates.shared.newVersion = "0.3.5"
+            Updates.shared.lastChecked = Date()
         case "saved":
             saveState = .saved("Saved 2 playlist cues and lyrics for 1 song. Open Prime, check the songs, "
                                + "then save them to the cloud.")

@@ -19,6 +19,8 @@ Mac app that sets up ProPresenter MIDI cues in Loop Community Prime each week: t
 
 **Full Disk Access.** Prime keeps its library in its own app container, and without Full Disk Access macOS asks to Allow opening it every launch. On first launch the app explains this and opens System Settings › Privacy & Security › Full Disk Access; it notices the switch on its own. Not Now is remembered, and Settings › Prime Library can turn it on later.
 
+**Updates.** Sparkle checks once a day; Settings › Updates and a toolbar icon show when a new version is out. The update window lists every version newer than the one installed (the feed carries the last eight versions' notes and the app trims the rest).
+
 **Settings.** Note numbers (19 lyrics, 18 playlist item), MIDI channel, the early-fire time, and whether playlist headers count when numbering items are all adjustable.
 
 **Safety.** Saving backs up the whole Prime database to `~/Documents/PrimeBackups` first and only replaces those two notes on Prime's lyrics bus. Lights and other cues are kept, and songs with more than one playlist cue (medleys) are left alone. Lyric saves also write the same baseline file as the `prime-midi-cues` skill, so `prime.py learn` still works.

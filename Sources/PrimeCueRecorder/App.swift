@@ -95,6 +95,9 @@ struct ContentView: View {
             .help("Reload from Prime and ProPresenter")
         }
         ToolbarItem(placement: .primaryAction) {
+            UpdateBadge()
+        }
+        ToolbarItem(placement: .primaryAction) {
             SettingsLink { Label("Settings", systemImage: "gearshape") }
                 .help("Settings")
         }
@@ -997,6 +1000,7 @@ struct SettingsView: View {
                          + "or the playlist item number.")
                         .foregroundStyle(.secondary)
                 }
+                UpdatesSection()
             }
         }
         .formStyle(.grouped)

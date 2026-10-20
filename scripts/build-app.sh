@@ -116,12 +116,19 @@ echo "Built $DMG"
 
 # The update feed: this version, signed, downloading from its GitHub release.
 if [ -n "${RELEASE:-}" ]; then
-    # release-notes/<version>.md is what the update window shows under "What's new".
+    # release-notes/<version>.md is what the update window shows under "What's new". The feed carries
+    # the last few versions under "Version x.y.z" headings, newest first, and the app hides the ones
+    # already installed (ReleaseNotes.swift), so skipping a version doesn't skip its notes.
     NOTES="release-notes/$VERSION.md"
     [ -f "$NOTES" ] || { echo "write $NOTES first: it's shown in the update window"; exit 1; }
     FEED=$(mktemp -d)
     cp "$DMG" "$FEED/"
-    cp "$NOTES" "$FEED/PrimeCueRecorder.md"
+    for v in $(ls release-notes | sed 's/\.md$//' | sort -t. -k1,1nr -k2,2nr -k3,3nr); do
+        [ "$(printf '%s\n%s\n' "$v" "$VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$VERSION" ] || continue
+        printf '### Version %s\n\n' "$v"
+        sed "/^## What's new/d" "release-notes/$v.md"
+        printf '\n'
+    done | awk '/^### Version / { n++ } n <= 8' > "$FEED/PrimeCueRecorder.md"
     .build/artifacts/sparkle/Sparkle/bin/generate_appcast "$FEED" --ed-key-file "$SPARKLE_KEY" \
         --embed-release-notes \
         --download-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" \

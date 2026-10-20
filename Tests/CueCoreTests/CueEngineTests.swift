@@ -206,3 +206,25 @@ final class CueShiftTests: XCTestCase {
         XCTAssertNotNil(CueShift.shift(cues, in: unknown, by: -0.5).skipped)
     }
 }
+
+final class ReleaseNotesTests: XCTestCase {
+    let notes = NSAttributedString(string: "Version 0.3.4\nArrangements\nVersion 0.3.3\nDisk access\n"
+                                   + "Version 0.3.2\nSaved cues\n")
+
+    func testSkippedVersionsAreShownAndInstalledOnesCut() {
+        XCTAssertEqual(ReleaseNotes.newer(than: "0.3.2", in: notes)?.string,
+                       "Version 0.3.4\nArrangements\nVersion 0.3.3\nDisk access\n")
+        XCTAssertEqual(ReleaseNotes.newer(than: "0.3.3", in: notes)?.string, "Version 0.3.4\nArrangements\n")
+    }
+
+    func testOlderInstallsOrUnmarkedNotesAreLeftAlone() {
+        XCTAssertNil(ReleaseNotes.newer(than: "0.2.0", in: notes))
+        XCTAssertNil(ReleaseNotes.newer(than: "0.3.1", in: NSAttributedString(string: "- Fixes\n")))
+        XCTAssertTrue(ReleaseNotes.isNewer("0.10.0", than: "0.9.9"))
+    }
+
+    func testHeadingsAreFoundWithoutLineBreaks() {
+        let run = NSAttributedString(string: "Version 0.3.4Arrangements.Version 0.3.3Disk access.")
+        XCTAssertEqual(ReleaseNotes.newer(than: "0.3.3", in: run)?.string, "Version 0.3.4Arrangements.")
+    }
+}
