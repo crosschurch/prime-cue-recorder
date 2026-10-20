@@ -13,7 +13,9 @@ Mac app that sets up ProPresenter MIDI cues in Loop Community Prime each week: t
 
 **Songs without sections** (uploaded songs, songs with tempo changes) are timed by the clock instead. Prime stores their cues as a fraction of the whole song, so the app reads the song's length from its downloaded stems, and after recording asks where the first slide lands in the song (it starts from the recorded time, which is right when Record and Play were pressed together). The rest follow the clicks.
 
-**Shift Lyric Cues** (toolbar, ⇆) moves every saved lyric cue in this week's setlist, or one song, earlier or later by a set amount (0.5 s earlier by default), for when slides keep changing a little late. Playlist item cues stay put, and it can also move new recordings by the same amount. A cue pushed past the start of its section moves into the section before it when both play once; in a section that repeats it stops at the edge instead, and the sheet says how many did. Shifting back the other way undoes it.
+**Shift Lyric Cues** (toolbar, ⇆) moves every saved lyric cue in this week's setlist earlier or later by a set amount (0.5 s earlier by default), for when slides keep changing a little late. Playlist item cues stay put, and it can also move new recordings by the same amount. A cue pushed past the start of its section moves into the section before it when both play once; in a section that repeats it stops at the edge instead, and the sheet says how many did. Shifting back the other way undoes it.
+
+**Saved Cues** (on a song that already has lyric cues) lists where each slide fires, with its words from ProPresenter. Click a slide and use − / + (or ← / →) to move just that one, or move a group at once: every slide, the lyrics only, or only Interlude and blank slides (so lyrics can come in a touch early while instrumental slides wait). The same controls are on the review screen after recording. Moves are written with Save to Prime.
 
 **Settings.** Note numbers (19 lyrics, 18 playlist item), MIDI channel, the early-fire time, and whether playlist headers count when numbering items are all adjustable.
 

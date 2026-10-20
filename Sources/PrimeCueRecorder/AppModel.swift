@@ -419,16 +419,16 @@ final class AppModel {
         var skipped: [String] = []  // "Song name: reason"
     }
 
-    /// What shifting the saved lyric cues by `seconds` (< 0 is earlier) would do, read fresh
+    /// What shifting this week's saved lyric cues by `seconds` (< 0 is earlier) would do, read fresh
     /// from Prime. Songs with a recording that isn't saved yet are left out: saving it replaces
     /// their cues anyway.
-    func shiftPreview(seconds: Double, onlyVersionId: String? = nil) -> ShiftPreview {
+    func shiftPreview(seconds: Double) -> ShiftPreview {
         var preview = ShiftPreview()
         #if DEBUG
         if let demo = demoShiftPreview { return demo }
         #endif
         guard let db else { return preview }
-        for entry in songs where entry.isMusic && entry.lyricCues > 0 && (onlyVersionId == nil || entry.id == onlyVersionId) {
+        for entry in songs where entry.isMusic && entry.lyricCues > 0 {
             if pendingLyrics[entry.id] != nil {
                 preview.skipped.append("\(entry.name): recorded but not saved yet")
                 continue
@@ -454,10 +454,10 @@ final class AppModel {
 
     /// Moves every saved lyric cue in this week's songs (or one song) by `seconds`; playlist
     /// item cues stay put. `adjustLead` also moves new recordings by the same amount.
-    func shiftLyrics(seconds: Double, onlyVersionId: String? = nil, adjustLead: Bool) {
+    func shiftLyrics(seconds: Double, adjustLead: Bool) {
         whenPrimeIsClosed { model in
             guard let db = model.db else { model.saveState = .idle; return }
-            let preview = model.shiftPreview(seconds: seconds, onlyVersionId: onlyVersionId)
+            let preview = model.shiftPreview(seconds: seconds)
             do {
                 if !preview.moves.isEmpty { try db.move(preview.moves, lyricNote: model.notes.lyric) }
                 if adjustLead { model.leadSeconds = min(max(model.leadSeconds - seconds, 0), 3) }

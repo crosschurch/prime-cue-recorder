@@ -848,14 +848,12 @@ private struct ShiftSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var amount = 0.5
     @State private var earlier = true
-    @State private var onlyThisSong = false
     @State private var adjustLead = true
     @State private var preview = AppModel.ShiftPreview()
 
     private var seconds: Double { earlier ? -amount : amount }
     private var direction: String { earlier ? "earlier" : "later" }
     private var setlistName: String { model.setlists.first { $0.id == model.setlistId }?.name ?? "this setlist" }
-    private var songName: String? { model.songs.first { $0.id == model.versionId }?.name }
     private var newLead: Double { min(max(model.leadSeconds - seconds, 0), 3) }
 
     var body: some View {
@@ -877,13 +875,13 @@ private struct ShiftSheet: View {
                     .foregroundStyle(.secondary)
             }
             Section {
-                Picker("Songs", selection: $onlyThisSong) {
-                    Text("Every song in “\(setlistName)”").tag(false)
-                    if let songName { Text("Only “\(songName)”").tag(true) }
-                }
-                .pickerStyle(.radioGroup)
+                LabeledContent("Songs", value: "Every song in “\(setlistName)”")
                 Toggle(String(format: "Also fire new recordings %.1fs %@ (%.1fs → %.1fs early)",
                               amount, direction, model.leadSeconds, newLead), isOn: $adjustLead)
+            } footer: {
+                Text("To move one song's cues, or only its lyrics or Interludes, choose the song and use its "
+                     + "Saved Cues.")
+                    .foregroundStyle(.secondary)
             }
             Section {
                 Label(summary, systemImage: preview.cues > 0 ? "arrow.left.arrow.right.circle.fill" : "info.circle")
@@ -910,16 +908,15 @@ private struct ShiftSheet: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(PrimeDB.primeIsRunning ? "Quit Prime and Shift" : "Shift Cues") {
-                    model.shiftLyrics(seconds: seconds, onlyVersionId: onlyThisSong ? model.versionId : nil,
-                                      adjustLead: adjustLead)
+                    model.shiftLyrics(seconds: seconds, adjustLead: adjustLead)
                     if PrimeDB.primeIsRunning { model.quitPrime() }
                     dismiss()
                 }
                 .disabled(preview.cues == 0 && !adjustLead)
             }
         }
-        .task(id: "\(seconds) \(onlyThisSong)") {
-            preview = model.shiftPreview(seconds: seconds, onlyVersionId: onlyThisSong ? model.versionId : nil)
+        .task(id: seconds) {
+            preview = model.shiftPreview(seconds: seconds)
         }
     }
 
