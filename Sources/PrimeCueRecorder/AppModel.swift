@@ -45,7 +45,9 @@ final class AppModel {
     var playlistId: String? { didSet { if playlistId != oldValue { Task { await loadPlaylistItems() } } } }
     var playlistItems: [PPPlaylistItem] = []
     /// Prime version id -> playlist item number. Starts from title matching; editable per song.
-    var itemNumbers: [String: Int] = [:]
+    var itemNumbers: [String: Int] = [:] {
+        didSet { if itemNumbers[versionId ?? ""] != oldValue[versionId ?? ""] { Task { await loadSlides() } } }
+    }
     /// Songs the user chose to leave without a playlist cue this week.
     var skipPlaylistCue: Set<String> = []
 
@@ -59,6 +61,13 @@ final class AppModel {
     var firstSlideAt: Double?
     /// Recorded lyric cues waiting to be saved, by Prime version id.
     var pendingLyrics: [String: CuePlan] = [:]
+
+    // Saved lyric cues of the selected song, for moving them
+    var savedCues: [SavedCue] = []
+    /// The song's slides in ProPresenter, by slide number - 1; nil until read (needs the playlist item).
+    var savedSlides: [(group: String, text: String)]?
+    /// Moves waiting to be saved: Prime version id -> cue id -> seconds (> 0 is later).
+    var cueEdits: [String: [String: Double]] = [:]
     var showShift = false
     #if DEBUG
     var demoShiftPreview: ShiftPreview?
@@ -119,7 +128,12 @@ final class AppModel {
         songs.filter { if case .willSet = playlistStatus($0) { true } else { false } }
     }
 
-    var changeCount: Int { playlistChanges.count + pendingLyrics.count }
+    var changeCount: Int { playlistChanges.count + pendingLyrics.count + editedSongs.count }
+
+    /// Songs with saved cues moved but not written yet (a new recording replaces them instead).
+    var editedSongs: [String] {
+        cueEdits.filter { !$0.value.isEmpty && pendingLyrics[$0.key] == nil }.map(\.key)
+    }
 
     var nextSongNeedingLyrics: SetlistSong? {
         let order = songs.filter { $0.needsLyrics && pendingLyrics[$0.id] == nil }
@@ -158,8 +172,82 @@ final class AppModel {
     }
 
     private func loadSong() {
-        guard let db, let versionId else { song = nil; return }
-        do { song = try db.song(versionId: versionId) } catch { self.error = error.localizedDescription }
+        savedSlides = nil
+        guard let db, let versionId else { song = nil; savedCues = []; return }
+        do {
+            song = try db.song(versionId: versionId)
+            savedCues = try db.cues(versionId: versionId, note: notes.lyric)
+        } catch { self.error = error.localizedDescription }
+        Task { await loadSlides() }
+    }
+
+    /// Reads the selected song's presentation from ProPresenter, through its playlist item, so
+    /// saved cues (which only know their slide number) can show their words.
+    func loadSlides() async {
+        guard let client, let versionId, let n = itemNumbers[versionId],
+              let uuid = item(number: n)?.presentationId else { return }
+        let presentation = try? await client.presentation(uuid: uuid)
+        if self.versionId == versionId, let presentation { savedSlides = presentation.slides }
+    }
+
+    // MARK: Moving saved lyric cues
+
+    struct SavedRow: Identifiable {
+        let id: String
+        let slide: Int
+        let group: String       // ProPresenter group, else Prime's section
+        let text: String?       // nil when ProPresenter isn't connected
+        let time: Double?       // where it fires now
+        let nudge: Double
+        let newTime: Double?    // where it will fire once saved
+
+        var isInstrumental: Bool { CueGroup.isInstrumental(group: group, text: text ?? "-") }
+    }
+
+    var savedRows: [SavedRow] {
+        guard let song else { return [] }
+        let edits = cueEdits[song.versionId] ?? [:]
+        let types = Dictionary(song.sections.map { ($0.id, $0.type) }, uniquingKeysWith: { a, _ in a })
+        return savedCues.map { cue in
+            let slide = savedSlides.flatMap { $0.indices.contains(cue.velocity - 1) ? $0[cue.velocity - 1] : nil }
+            let nudge = edits[cue.id] ?? 0
+            let time = CueShift.seconds(sectionId: cue.sectionId, progress: cue.progress, in: song)
+            var newTime = time
+            if nudge != 0 {
+                let moved = CueShift.shift([cue], in: song, by: nudge).moves[cue.id]
+                newTime = moved.flatMap { CueShift.seconds(sectionId: $0.sectionId, progress: $0.progress, in: song) } ?? time
+            }
+            return SavedRow(id: cue.id, slide: cue.velocity,
+                            group: slide?.group ?? types[cue.sectionId].map(prettySection) ?? "",
+                            text: slide?.text, time: time, nudge: nudge, newTime: newTime)
+        }
+        .sorted { ($0.time ?? 0, $0.slide) < ($1.time ?? 0, $1.slide) }
+    }
+
+    func nudgeSaved(_ cueIds: [String], by seconds: Double) {
+        guard let versionId = song?.versionId else { return }
+        var edits = cueEdits[versionId] ?? [:]
+        for id in cueIds {
+            let value = (((edits[id] ?? 0) + seconds) * 100).rounded() / 100
+            edits[id] = value == 0 ? nil : value
+        }
+        cueEdits[versionId] = edits
+    }
+
+    func nudgeSaved(_ group: CueGroup, by seconds: Double) {
+        nudgeSaved(savedRows.filter { group.contains(group: $0.group, text: $0.text ?? "-") }.map(\.id), by: seconds)
+    }
+
+    func resetSaved(_ cueId: String? = nil) {
+        guard let versionId = song?.versionId else { return }
+        if let cueId { cueEdits[versionId]?[cueId] = nil } else { cueEdits[versionId] = nil }
+    }
+
+    /// Recorded slides in `group`, moved together on the review screen.
+    func nudge(_ group: CueGroup, by seconds: Double) {
+        for i in clicks.indices where group.contains(group: clicks[i].group, text: clicks[i].text) {
+            nudge(click: i, by: seconds)
+        }
     }
 
     // MARK: ProPresenter
@@ -264,6 +352,17 @@ final class AppModel {
         recordTask?.cancel()
         recordTask = nil
         phase = clicks.isEmpty ? .ready : .review
+    }
+
+    /// Moves one recorded slide's cue later (> 0) or earlier, e.g. an Interlude clicked too soon.
+    func nudge(click: Int, by seconds: Double) {
+        guard clicks.indices.contains(click) else { return }
+        clicks[click].nudge = ((clicks[click].nudge + seconds) * 100).rounded() / 100
+    }
+
+    func resetNudge(click: Int) {
+        guard clicks.indices.contains(click) else { return }
+        clicks[click].nudge = 0
     }
 
     func discard() {
@@ -406,14 +505,28 @@ final class AppModel {
                                        cues: plan.cues.sorted { $0.slide < $1.slide }
                                            .map { ($0.slide, $0.sectionId, $0.progress) }))
             }
-            try db.write(writes, lyricNote: notes.lyric)
+            if !writes.isEmpty { try db.write(writes, lyricNote: notes.lyric) }
+            var moves: [String: [String: (sectionId: String, progress: Double)]] = [:]
+            for id in editedSongs {
+                let song = try db.song(versionId: id)
+                for cue in try db.cues(versionId: id, note: notes.lyric) {
+                    guard let seconds = cueEdits[id]?[cue.id],
+                          let moved = CueShift.shift([cue], in: song, by: seconds).moves[cue.id] else { continue }
+                    moves[id, default: [:]][cue.id] = moved
+                }
+            }
+            if !moves.isEmpty { try db.move(moves, lyricNote: notes.lyric) }
             let playlistCount = playlistChanges.count
             let lyricSongs = pendingLyrics.count
+            let movedSongs = moves.count
             pendingLyrics = [:]
+            cueEdits = [:]
             loadSongs()
+            loadSong()
             var parts: [String] = []
             if playlistCount > 0 { parts.append("\(playlistCount) playlist cue\(playlistCount == 1 ? "" : "s")") }
             if lyricSongs > 0 { parts.append("lyrics for \(lyricSongs) song\(lyricSongs == 1 ? "" : "s")") }
+            if movedSongs > 0 { parts.append("moved cues in \(movedSongs) song\(movedSongs == 1 ? "" : "s")") }
             saveState = .saved("Saved " + parts.joined(separator: " and ")
                                + ". Open Prime, check the songs, then save them to the cloud.")
         } catch {
@@ -421,4 +534,9 @@ final class AppModel {
             saveState = .idle
         }
     }
+}
+
+/// "verse_1" -> "Verse 1"
+func prettySection(_ type: String) -> String {
+    type.replacingOccurrences(of: "_", with: " ").capitalized
 }

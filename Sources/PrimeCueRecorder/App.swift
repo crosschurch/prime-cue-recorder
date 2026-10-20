@@ -223,10 +223,12 @@ private struct SaveCard: View {
     private var summary: String {
         let playlist = model.playlistChanges.count
         let lyrics = model.pendingLyrics.count
+        let moved = model.editedSongs.count
         let missing = model.songs.filter { $0.needsLyrics && model.pendingLyrics[$0.id] == nil }.count
         var parts: [String] = []
         if playlist > 0 { parts.append("\(playlist) playlist cue\(playlist == 1 ? "" : "s") to set") }
         if lyrics > 0 { parts.append("\(lyrics) song\(lyrics == 1 ? "" : "s") recorded") }
+        if moved > 0 { parts.append("cues moved in \(moved) song\(moved == 1 ? "" : "s")") }
         if missing > 0 { parts.append("\(missing) still need\(missing == 1 ? "s" : "") lyrics") }
         return parts.isEmpty ? "Everything this week has cues." : parts.joined(separator: " · ")
     }
@@ -267,6 +269,9 @@ private struct ReadyView: View {
 
                 PlaylistCueCard(model: model, entry: entry)
                 LyricsCard(model: model, song: song, entry: entry)
+                if entry.isMusic && !model.savedCues.isEmpty && model.pendingLyrics[entry.id] == nil {
+                    SavedCuesCard(model: model)
+                }
             }
             .padding(28)
             .frame(maxWidth: 640)
@@ -376,7 +381,7 @@ private struct LyricsCard: View {
             } else {
                 Text(caption).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Steps()
+                if entry.lyricCues == 0 || model.pendingLyrics[entry.id] != nil { Steps() }
                 HStack {
                     if model.pendingLyrics[entry.id] != nil {
                         Button("Discard Recording", role: .destructive) { model.forget(entry.id) }
@@ -396,7 +401,7 @@ private struct LyricsCard: View {
             return "Recorded and waiting to be saved. Record again to replace it."
         }
         if entry.lyricCues > 0 {
-            return "This song already has lyric cues. Recording replaces them when you save."
+            return "This song already has lyric cues. Move them below, or record again to replace them when you save."
         }
         let lead = String(format: "Cues fire %g seconds before your clicks to cover MIDI delay.", model.leadSeconds)
         if !song.hasSections {
@@ -470,11 +475,19 @@ private struct RecordingView: View {
                 ContentUnavailableView("Waiting for the First Slide", systemImage: "cursorarrow.click.2",
                                        description: Text("Slides you click in ProPresenter show up here."))
             } else {
-                List {
-                    ForEach(Array(model.clicks.enumerated().reversed()), id: \.offset) { i, click in
-                        SlideRow(slide: click.slide, group: click.group, text: click.text,
-                                 trailing: String(format: "%.1fs", click.time))
-                            .opacity(i == model.clicks.count - 1 ? 1 : 0.75)
+                // Like a chat: the newest slide comes in at the bottom and the list follows it.
+                ScrollViewReader { proxy in
+                    List {
+                        ForEach(Array(model.clicks.enumerated()), id: \.offset) { i, click in
+                            SlideRow(slide: click.slide, group: click.group, text: click.text,
+                                     trailing: String(format: "%.1fs", click.time))
+                                .opacity(i == model.clicks.count - 1 ? 1 : 0.75)
+                                .id(i)
+                        }
+                    }
+                    .defaultScrollAnchor(.bottom)
+                    .onChange(of: model.clicks.count) {
+                        withAnimation(.snappy) { proxy.scrollTo(model.clicks.count - 1, anchor: .bottom) }
                     }
                 }
                 .listStyle(.inset)
@@ -491,6 +504,14 @@ private struct RecordingView: View {
 
 private struct ReviewView: View {
     @Bindable var model: AppModel
+    @State private var selected: Int?
+    static let step = 0.25
+
+    private func nudgeSelected(by seconds: Double) -> KeyPress.Result {
+        guard let selected else { return .ignored }
+        model.nudge(click: selected, by: seconds)
+        return .handled
+    }
 
     var body: some View {
         if let plan = model.plan {
@@ -523,14 +544,31 @@ private struct ReviewView: View {
                         .glassCard(tint: .orange, shape: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
 
-                List(Array(plan.cues.enumerated()), id: \.offset) { _, cue in
+                BulkMoveBar(count: { group in model.clicks.filter { group.contains(group: $0.group, text: $0.text) }.count },
+                            apply: { model.nudge($0, by: $1) })
+
+                List(plan.cues, id: \.click, selection: $selected) { cue in
+                    let nudge = model.clicks.indices.contains(cue.click) ? model.clicks[cue.click].nudge : 0
                     SlideRow(slide: cue.slide, group: pretty(cue.sectionType), text: cue.text,
-                             trailing: cue.time.map { clock($0) } ?? String(format: "beat %.2f", cue.beat))
+                             trailing: cue.time.map { clock($0) } ?? String(format: "beat %.2f", cue.beat),
+                             nudge: nudge) {
+                        if selected == cue.click {
+                            NudgeControls(nudge: nudge,
+                                          move: { model.nudge(click: cue.click, by: $0) },
+                                          reset: { model.resetNudge(click: cue.click) })
+                        }
+                    }
                 }
+                .onKeyPress(.leftArrow) { nudgeSelected(by: -Self.step) }
+                .onKeyPress(.rightArrow) { nudgeSelected(by: Self.step) }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .glassCard(shape: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                Text("Select a slide to move its cue: − and + (or ← and →) move it a quarter second.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(24)
             .safeAreaInset(edge: .bottom) {
@@ -595,6 +633,111 @@ private struct FirstSlideCard: View {
     }
 }
 
+// MARK: Saved cues
+
+/// A song's lyric cues already in Prime, where they fire, and moving them: one at a time, or a
+/// group at once (lyrics a bit earlier, Interludes and blanks a bit later).
+private struct SavedCuesCard: View {
+    @Bindable var model: AppModel
+    @State private var selected: String?
+
+    var body: some View {
+        let rows = model.savedRows
+        let moved = rows.filter { $0.nudge != 0 }.count
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Saved Cues", systemImage: "slider.horizontal.below.rectangle").font(.headline)
+                Spacer()
+                if moved > 0 {
+                    Text("\(moved) moved, not saved yet").foregroundStyle(.orange)
+                    Button("Reset") { model.resetSaved() }.glassButton()
+                }
+            }
+            Text(caption).font(.callout).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            BulkMoveBar(count: { group in rows.filter { group.contains(group: $0.group, text: $0.text ?? "-") }.count },
+                        apply: { model.nudgeSaved($0, by: $1) },
+                        canPickGroup: model.savedSlides != nil)
+            VStack(spacing: 0) {
+                ForEach(rows) { row in
+                    SlideRow(slide: row.slide, group: row.group, text: row.text ?? "Slide \(row.slide)",
+                             trailing: row.newTime.map { clock($0) } ?? "", nudge: row.nudge) {
+                        if selected == row.id {
+                            NudgeControls(nudge: row.nudge,
+                                          move: { model.nudgeSaved([row.id], by: $0) },
+                                          reset: { model.resetSaved(row.id) })
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .background(selected == row.id ? AnyShapeStyle(.tint.opacity(0.14)) : AnyShapeStyle(.clear),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .contentShape(Rectangle())
+                    .onTapGesture { selected = selected == row.id ? nil : row.id }
+                    if row.id != rows.last?.id { Divider().padding(.leading, 48) }
+                }
+            }
+            if moved > 0 {
+                HStack {
+                    Spacer()
+                    Button("Save to Prime", systemImage: "square.and.arrow.down") { model.save() }
+                        .glassProminentButton()
+                        .disabled(model.saveState != .idle)
+                }
+            }
+        }
+        .padding(18)
+        .glassCard(shape: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.leftArrow) { nudgeSelected(by: -ReviewView.step) }
+        .onKeyPress(.rightArrow) { nudgeSelected(by: ReviewView.step) }
+        .onChange(of: model.versionId) { selected = nil }
+    }
+
+    private var caption: String {
+        let base = "Where each slide fires in the song. Click a slide to move just that one, or move a group "
+            + "at once. Changes are written when you save."
+        return model.savedSlides == nil
+            ? base + " Connect to ProPresenter and pick this song's playlist item to see each slide's words."
+            : base
+    }
+
+    private func nudgeSelected(by seconds: Double) -> KeyPress.Result {
+        guard let selected else { return .ignored }
+        model.nudgeSaved([selected], by: seconds)
+        return .handled
+    }
+}
+
+/// Moves a group of slides earlier or later in one go.
+private struct BulkMoveBar: View {
+    let count: (CueGroup) -> Int
+    let apply: (CueGroup, Double) -> Void
+    var canPickGroup = true
+    @State private var group = CueGroup.lyrics
+    @State private var amount = 0.5
+
+    var body: some View {
+        let target = canPickGroup ? group : .all
+        HStack(spacing: 12) {
+            Picker("Move", selection: canPickGroup ? $group : .constant(.all)) {
+                ForEach(CueGroup.allCases) { Text("\($0.title) (\(count($0)))").tag($0) }
+            }
+            .frame(maxWidth: 330)
+            .disabled(!canPickGroup)
+            .help(canPickGroup ? "" : "Needs the slides' words from ProPresenter")
+            Stepper(value: $amount, in: 0.1...5, step: 0.1) {
+                Text(amount.formatted(.number.precision(.fractionLength(1))) + " s").monospacedDigit()
+            }
+            Spacer(minLength: 0)
+            Button("Earlier", systemImage: "chevron.backward") { apply(target, -amount) }
+                .glassButton()
+            Button("Later", systemImage: "chevron.forward") { apply(target, amount) }
+                .glassButton()
+        }
+    }
+}
+
 // MARK: Pieces
 
 private struct RecordButton: View {
@@ -614,11 +757,13 @@ private struct RecordButton: View {
     }
 }
 
-private struct SlideRow: View {
+private struct SlideRow<Accessory: View>: View {
     let slide: Int
     let group: String
     let text: String
     let trailing: String
+    var nudge: Double = 0
+    @ViewBuilder var accessory: Accessory
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -634,9 +779,44 @@ private struct SlideRow: View {
                 }
             }
             Spacer()
+            accessory
+            if nudge != 0 {
+                Text(nudge.formatted(.number.precision(.fractionLength(0...2)).sign(strategy: .always())) + "s")
+                    .font(.caption.weight(.semibold)).monospacedDigit()
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(.orange.opacity(0.2), in: Capsule())
+                    .help("Fires \(abs(nudge).formatted()) s \(nudge > 0 ? "later" : "earlier") than you clicked")
+            }
             Text(trailing).font(.callout).monospacedDigit().foregroundStyle(.secondary)
         }
         .padding(.vertical, 3)
+    }
+}
+
+extension SlideRow where Accessory == EmptyView {
+    init(slide: Int, group: String, text: String, trailing: String) {
+        self.init(slide: slide, group: group, text: text, trailing: trailing) { EmptyView() }
+    }
+}
+
+/// − / + for one cue in the review list.
+private struct NudgeControls: View {
+    let nudge: Double
+    let move: (Double) -> Void
+    let reset: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button { move(-ReviewView.step) } label: { Image(systemName: "minus") }
+                .help("Earlier")
+            Button { move(ReviewView.step) } label: { Image(systemName: "plus") }
+                .help("Later")
+            if nudge != 0 {
+                Button("Reset", action: reset)
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 }
 

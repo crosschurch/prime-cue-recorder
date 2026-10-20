@@ -43,12 +43,34 @@ public final class ProPresenterClient: @unchecked Sendable {
     public func presentation(uuid: String) async throws -> PPPresentation {
         let p = try await get("v1/presentation/\(uuid)")["presentation"] as? [String: Any] ?? [:]
         let id = p["id"] as? [String: Any] ?? [:]
-        let slides = (p["groups"] as? [[String: Any]] ?? []).flatMap { group in
+        var groups = p["groups"] as? [[String: Any]] ?? []
+        // Slide numbers count through the current arrangement (Chorus, Verse, Chorus…), not the
+        // list of groups, so a repeated group is in there twice.
+        let byId = Dictionary(groups.compactMap { g in (g["uuid"] as? String).map { ($0, g) } },
+                              uniquingKeysWith: { a, _ in a })
+        if let current = p["current_arrangement"] as? String,
+           let arrangement = (p["arrangements"] as? [[String: Any]])?.first(where: {
+               ($0["id"] as? [String: Any])?["uuid"] as? String == current
+           }),
+           let order = arrangement["groups"] as? [String], !order.isEmpty {
+            groups = order.compactMap { byId[$0] }
+        }
+        let slides = groups.flatMap { group in
             (group["slides"] as? [[String: Any]] ?? []).map {
-                (group: group["name"] as? String ?? "", text: $0["text"] as? String ?? "")
+                (group: group["name"] as? String ?? "", text: Self.clean($0["text"] as? String ?? ""))
             }
         }
         return PPPresentation(uuid: uuid, name: id["name"] as? String ?? "", slides: slides)
+    }
+
+    /// Slide text without the invisible characters some slides are padded with, one line per line.
+    static func clean(_ text: String) -> String {
+        let invisible = CharacterSet(charactersIn: "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}")
+            .union(.whitespaces)
+        return text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: invisible) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     /// Every playlist, with folders flattened.

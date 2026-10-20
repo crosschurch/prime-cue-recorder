@@ -2,7 +2,7 @@
 import AppKit
 import CueCore
 
-/// PCR_DEMO=ready|recording|review|waiting|saved|shift swift run (add -clock for a song without sections) — sample data for checking the UI
+/// PCR_DEMO=ready|recording|review|edit|waiting|saved|shift swift run (add -clock for a song without sections) — sample data for checking the UI
 /// without ProPresenter or a Prime library.
 extension AppModel {
     func loadDemo(_ demo: String) {
@@ -69,13 +69,25 @@ extension AppModel {
         }
         switch phase {
         case "recording": self.phase = .recording
-        case "review": self.phase = .review
+        case "review":
+            clicks[4].nudge = 0.5
+            self.phase = .review
         case "waiting": saveState = .waitingForPrime
         case "shift":
             clicks = []
             demoShiftPreview = ShiftPreview(songs: 3, cues: 118, pinned: 2,
                                             skipped: ["Goodness of God: recorded but not saved yet"])
             showShift = true
+        case "edit":
+            // Goodness of God already in Prime, with an instrumental turnaround after the chorus.
+            let plan = CueEngine.plan(clicks: clicks, arrangement: arrangement, tempo: 126, leadSeconds: 0.5)
+            savedCues = plan.cues.enumerated().map { i, c in
+                SavedCue(id: "\(i)", velocity: c.slide, sectionId: c.sectionId, progress: c.progress)
+            } + [SavedCue(id: "x", velocity: 12, sectionId: "3", progress: 0.9)]
+            savedSlides = [("Intro", "")] + clicks.map { ($0.group, $0.text) } + [("Interlude", "")]
+            songs[1] = SetlistSong(id: "v", name: "Goodness of God", versionName: "", lyricCues: 11, isActive: true)
+            cueEdits = ["v": ["x": 1, "3": -0.5]]
+            clicks = []
         case "saved":
             saveState = .saved("Saved 2 playlist cues and lyrics for 1 song. Open Prime, check the songs, "
                                + "then save them to the cloud.")

@@ -88,5 +88,17 @@ public enum CueShift {
         return result
     }
 
+    /// Seconds into the song where a cue fires (the first time, for a section that repeats).
+    public static func seconds(sectionId: String, progress: Double, in song: PrimeSong) -> Double? {
+        if !song.hasSections { return song.duration.map { progress * $0 } }
+        guard song.tempo > 0 else { return nil }
+        var start = 0.0
+        for s in song.arrangement where s.beats > 0 {
+            if s.id == sectionId { return (start + progress * s.beats) * 60 / song.tempo }
+            start += s.beats
+        }
+        return nil
+    }
+
     static func round6(_ x: Double) -> Double { (x * 1_000_000).rounded() / 1_000_000 }
 }

@@ -19,6 +19,8 @@ public struct SlideClick: Equatable, Sendable {
     public let slide: Int       // 1-based slide number, which is the MIDI velocity
     public let group: String    // ProPresenter group name ("Verse 1", "Chorus")
     public let text: String
+    /// Seconds to move this slide's cue by after recording; > 0 is later.
+    public var nudge: Double = 0
 
     public init(time: Double, slide: Int, group: String, text: String) {
         self.time = time; self.slide = slide; self.group = group; self.text = text
@@ -26,6 +28,7 @@ public struct SlideClick: Equatable, Sendable {
 }
 
 public struct PlannedCue: Equatable, Sendable {
+    public var click = 0        // index of the SlideClick it came from
     public let slide: Int
     public let sectionId: String
     public let progress: Double // 0-1 within the section, how Prime stores cues
@@ -33,6 +36,34 @@ public struct PlannedCue: Equatable, Sendable {
     public let sectionType: String
     public let text: String
     public var time: Double? = nil  // seconds into the song, for songs timed by the clock
+}
+
+/// Which slides a bulk move applies to. Interludes and blank slides usually want different
+/// timing from the lyrics: lyrics a little early, instrumental slides a little later.
+public enum CueGroup: String, CaseIterable, Identifiable, Sendable {
+    case all, lyrics, instrumental
+    public var id: Self { self }
+
+    public var title: String {
+        switch self {
+        case .all: "Every slide"
+        case .lyrics: "Lyrics (not Interlude or blank)"
+        case .instrumental: "Interlude and blank slides"
+        }
+    }
+
+    public func contains(group: String, text: String) -> Bool {
+        switch self {
+        case .all: true
+        case .lyrics: !Self.isInstrumental(group: group, text: text)
+        case .instrumental: Self.isInstrumental(group: group, text: text)
+        }
+    }
+
+    /// A blank slide, or one in an Interlude, Instrumental, Break, Solo or Turnaround group.
+    public static func isInstrumental(group: String, text: String) -> Bool {
+        text.isEmpty || ["interlude", "instrumental", "break", "solo", "turn"].contains(CueEngine.family(group) ?? "")
+    }
 }
 
 public struct CuePlan: Sendable {
@@ -69,7 +100,8 @@ public enum CueEngine {
             plan.warnings.append("This song has no sections in Prime.")
             return plan
         }
-        let clicks = deslip(raw)
+        let kept = keptIndices(raw)
+        let clicks = kept.map { raw[$0] }
 
         var starts: [Double] = []
         var total = 0.0
@@ -125,8 +157,8 @@ public enum CueEngine {
         for (i, s) in arrangement.enumerated() where firstIndex[s.id] == nil { firstIndex[s.id] = i }
         var repeated: [String] = []
         var early = 0
-        for c in clicks {
-            var beat = intercept + slope * (c.time - leadSeconds)
+        for (k, c) in clicks.enumerated() {
+            var beat = intercept + slope * (c.time + c.nudge - leadSeconds)
             if beat < 0 { early += 1 }
             beat = min(max((beat * 4).rounded() / 4, 0), total - 0.01)
             let i = starts.lastIndex { $0 <= beat } ?? 0
@@ -137,7 +169,7 @@ public enum CueEngine {
                 continue
             }
             plan.cues.append(PlannedCue(
-                slide: c.slide, sectionId: s.id,
+                click: kept[k], slide: c.slide, sectionId: s.id,
                 progress: ((beat - starts[i]) / s.beats * 1_000_000).rounded() / 1_000_000,
                 beat: beat, sectionType: s.type, text: c.text))
         }
@@ -160,18 +192,19 @@ public enum CueEngine {
     public static func planByTime(clicks raw: [SlideClick], duration: Double, firstSlideAt: Double?,
                                   leadSeconds: Double) -> CuePlan {
         var plan = CuePlan()
-        let clicks = deslip(raw)
+        let kept = keptIndices(raw)
+        let clicks = kept.map { raw[$0] }
         guard let first = clicks.first, duration > 0 else { return plan }
         let offset = (firstSlideAt ?? first.time) - first.time
         var early = 0
         var late = 0
-        for c in clicks {
-            var t = c.time + offset - leadSeconds
+        for (k, c) in clicks.enumerated() {
+            var t = c.time + c.nudge + offset - leadSeconds
             if t < 0 { early += 1 }
             if t > duration { late += 1 }
             t = min(max((t * 100).rounded() / 100, 0), duration - 0.01)
             plan.cues.append(PlannedCue(
-                slide: c.slide, sectionId: "",
+                click: kept[k], slide: c.slide, sectionId: "",
                 progress: (t / duration * 1_000_000).rounded() / 1_000_000,
                 beat: 0, sectionType: c.group, text: c.text, time: t))
         }
@@ -187,7 +220,11 @@ public enum CueEngine {
 
     /// A slide replaced within 0.6 s was a slip of the finger, not a line.
     public static func deslip(_ raw: [SlideClick]) -> [SlideClick] {
-        raw.indices.filter { $0 + 1 == raw.count || raw[$0 + 1].time - raw[$0].time >= 0.6 }.map { raw[$0] }
+        keptIndices(raw).map { raw[$0] }
+    }
+
+    static func keptIndices(_ raw: [SlideClick]) -> [Int] {
+        raw.indices.filter { $0 + 1 == raw.count || raw[$0 + 1].time - raw[$0].time >= 0.6 }
     }
 
     /// Least-squares line through (time, beat). Keeps the song's tempo when there are too

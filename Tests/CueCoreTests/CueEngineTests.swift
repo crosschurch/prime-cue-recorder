@@ -56,6 +56,28 @@ final class CueEngineTests: XCTestCase {
         XCTAssertEqual(plan.warnings.count, 1)
     }
 
+    func testNudgeMovesOneCueOnlyWithoutMovingTheAnchors() {
+        var clicks = [click(8, 2, "Verse 1"), click(16, 3, "Interlude"), click(24, 4, "Chorus"), click(40, 5, "Verse 2")]
+        clicks[1].nudge = 1   // one second later = 2 beats at 120 BPM
+        let plan = CueEngine.plan(clicks: clicks, arrangement: [intro, verse, chorus, verse2, outro],
+                                  tempo: 120, leadSeconds: 0)
+        XCTAssertEqual(plan.cues.map(\.beat), [8, 18, 24, 40])  // the Interlude moved 2 beats
+        XCTAssertEqual(plan.cues.map(\.click), [0, 1, 2, 3])
+    }
+
+    func testInterludesAndBlanksAreTheirOwnGroup() {
+        XCTAssertTrue(CueGroup.instrumental.contains(group: "Interlude", text: "Oh oh oh"))
+        XCTAssertTrue(CueGroup.instrumental.contains(group: "Verse 1", text: ""))
+        XCTAssertTrue(CueGroup.lyrics.contains(group: "Chorus 2", text: "All my life"))
+        XCTAssertFalse(CueGroup.lyrics.contains(group: "Instrumental", text: ""))
+        XCTAssertTrue(CueGroup.all.contains(group: "Interlude", text: ""))
+    }
+
+    func testSlideTextLosesInvisiblePadding() {
+        XCTAssertEqual(ProPresenterClient.clean("\r\u{200B}\u{2001}\u{200B}\n\u{200B}\r"), "")
+        XCTAssertEqual(ProPresenterClient.clean("Here's my heart\r\nTake and seal it "), "Here's my heart\nTake and seal it")
+    }
+
     func testFamilies() {
         XCTAssertEqual(CueEngine.family("Verse 2"), "verse")
         XCTAssertEqual(CueEngine.family("verse_2"), "verse")
