@@ -33,6 +33,7 @@ swift test
 ## Releasing
 
 ```sh
+$EDITOR release-notes/0.3.1.md    # what's new: shown in the update window and on the release page
 scripts/release.sh 0.3.1             # build, sign, notarize, tag, upload to a draft release
 gh release edit v0.3.1 --repo crosschurch/prime-cue-recorder --draft=false --latest   # ship it
 ```

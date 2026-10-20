@@ -116,9 +116,14 @@ echo "Built $DMG"
 
 # The update feed: this version, signed, downloading from its GitHub release.
 if [ -n "${RELEASE:-}" ]; then
+    # release-notes/<version>.md is what the update window shows under "What's new".
+    NOTES="release-notes/$VERSION.md"
+    [ -f "$NOTES" ] || { echo "write $NOTES first: it's shown in the update window"; exit 1; }
     FEED=$(mktemp -d)
     cp "$DMG" "$FEED/"
+    cp "$NOTES" "$FEED/PrimeCueRecorder.md"
     .build/artifacts/sparkle/Sparkle/bin/generate_appcast "$FEED" --ed-key-file "$SPARKLE_KEY" \
+        --embed-release-notes \
         --download-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" \
         --link "https://github.com/$REPO/releases" -o dist/appcast.xml
     rm -rf "$FEED"
