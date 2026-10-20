@@ -45,10 +45,11 @@ struct ContentView: View {
                     }
                 }
         }
-        .frame(minWidth: 1020, minHeight: 640)
-        .navigationTitle("Prime Cue Recorder")
+        .frame(minWidth: 1120, minHeight: 640)
+        // An empty title rather than none: removing the title packs every toolbar item to the
+        // left, while an empty one keeps the actions at the right edge.
+        .navigationTitle("")
         .toolbar { toolbar }
-        .hiddenWindowTitle()
         .sheet(isPresented: $showSetup) {
             SettingsView(model: model, isFirstRun: true)
         }
@@ -77,18 +78,23 @@ struct ContentView: View {
         ToolbarItem(placement: .navigation) {
             ConnectionBadge(connection: model.connection)
         }
-        ToolbarItemGroup(placement: .primaryAction) {
+        // Setlist and playlist on the left, actions on the right edge however wide the window is.
+        ToolbarItemGroup(placement: .navigation) {
             Picker("Prime Setlist", selection: $model.setlistId) {
                 ForEach(model.setlists) { list in
                     Text("\(list.name) — \(list.serviceDate)").tag(Optional(list.id))
                 }
             }
+            .frame(maxWidth: 280)
             .help("Prime setlist")
             Picker("ProPresenter Playlist", selection: $model.playlistId) {
                 if model.playlists.isEmpty { Text("No ProPresenter Playlist").tag(String?.none) }
                 ForEach(model.playlists) { Text($0.name).tag(Optional($0.id)) }
             }
+            .frame(maxWidth: 220)
             .help("ProPresenter playlist")
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
             Button("Shift Lyric Cues", systemImage: "arrow.left.arrow.right") { model.showShift = true }
                 .help("Move every saved lyric cue earlier or later")
                 .disabled(model.phase == .recording || model.saveState == .waitingForPrime || model.songs.isEmpty)
@@ -1001,12 +1007,6 @@ struct SettingsView: View {
 
 // MARK: Liquid Glass with a fallback for macOS 14–15
 
-extension View {
-    @ViewBuilder
-    func hiddenWindowTitle() -> some View {
-        if #available(macOS 15, *) { toolbar(removing: .title) } else { self }
-    }
-}
 
 struct GlassGroup<Content: View>: View {
     @ViewBuilder let content: Content
