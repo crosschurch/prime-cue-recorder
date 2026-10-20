@@ -513,6 +513,7 @@ final class AppModel {
     }
 
     func openPrime() {
+        saveState = .idle
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: PrimeDB.bundleID) else { return }
         NSWorkspace.shared.openApplication(at: url, configuration: .init())
     }

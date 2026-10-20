@@ -63,6 +63,10 @@ struct ContentView: View {
         .animation(.smooth, value: model.phase)
         .animation(.smooth, value: model.error)
         .animation(.smooth, value: model.saveState)
+        // A new change after saving puts the Save button back without clicking Done.
+        .onChange(of: model.changeCount) { _, count in
+            if count > 0, case .saved = model.saveState { model.saveState = .idle }
+        }
     }
 
     private func askForSetup() {
@@ -692,7 +696,7 @@ private struct SavedCuesCard: View {
                     Spacer()
                     Button("Save to Prime", systemImage: "square.and.arrow.down") { model.save() }
                         .glassProminentButton()
-                        .disabled(model.saveState != .idle)
+                        .disabled(model.saveState == .waitingForPrime)
                 }
             }
         }
