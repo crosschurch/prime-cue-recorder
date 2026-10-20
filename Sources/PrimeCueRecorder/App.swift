@@ -590,8 +590,13 @@ private struct ReviewView: View {
                         .glassCard(tint: .orange, shape: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
 
+                // The clicks this plan was made from: Keep empties model.clicks before this bar's last redraw.
+                let clicks = model.clicks
                 BulkMoveBar(count: { group in
-                                plan.cues.filter { group.contains(group: model.clicks[$0.click].group, text: $0.text) }.count
+                                plan.cues.filter {
+                                    clicks.indices.contains($0.click)
+                                        && group.contains(group: clicks[$0.click].group, text: $0.text)
+                                }.count
                             },
                             apply: { model.nudge($0, by: $1) })
 
