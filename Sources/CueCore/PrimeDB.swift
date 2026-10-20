@@ -55,6 +55,26 @@ public struct CueWrite: Sendable {
     }
 }
 
+/// A cue already saved in Prime.
+public struct SavedCue: Equatable, Sendable {
+    public let id: String
+    public let velocity: Int
+    public let sectionId: String
+    public let progress: Double
+
+    public init(id: String, velocity: Int, sectionId: String, progress: Double) {
+        self.id = id; self.velocity = velocity; self.sectionId = sectionId; self.progress = progress
+    }
+
+    init?(_ cue: [String: Any], note: Int) {
+        guard (cue["bus"] as? String) == PrimeDB.bus, (cue["noteNumber"] as? Int) == note,
+              let id = PrimeDB.string(cue["id"]) else { return nil }
+        self.init(id: id, velocity: (cue["noteVelocity"] as? Int) ?? 0,
+                  sectionId: PrimeDB.string(cue["multitrackSectionId"]) ?? "",
+                  progress: (cue["sectionProgress"] as? NSNumber)?.doubleValue ?? 0)
+    }
+}
+
 public struct PrimeSong: Sendable {
     public let versionId: String
     public let name: String
@@ -227,42 +247,91 @@ public final class PrimeDB {
     /// the backup's location.
     @discardableResult
     public func write(_ writes: [CueWrite], lyricNote: Int = CueNotes().lyric) throws -> URL {
+        let backup = try modify(label: "pre-record") { db in
+            var nextId = 100_000 + (Int(try query(db, """
+                SELECT max(CAST(json_extract(j.value, '$.id') AS INTEGER))
+                FROM multitrackVersion v, json_each(v.midiCues) j
+                """).first?[0] ?? "") ?? 0)
+            for w in writes {
+                var kept = try midiCues(db, versionId: w.versionId).filter {
+                    !(($0["noteNumber"] as? Int) == w.note && ($0["bus"] as? String) == Self.bus)
+                }
+                for cue in w.cues {
+                    kept.append([
+                        "bus": Self.bus, "channel": w.channel, "id": String(nextId),
+                        "isMigratedToBus": true, "messageType": ["noteOn": [String: Any]()],
+                        "multitrackSectionId": cue.sectionId, "noteNumber": w.note,
+                        "noteVelocity": cue.velocity, "sectionProgress": cue.progress,
+                    ])
+                    nextId += 1
+                }
+                try setMidiCues(db, versionId: w.versionId, kept)
+            }
+        }
+        for w in writes where w.note == lyricNote {
+            if let song = try? song(versionId: w.versionId) { try? saveBaseline(song: song, cues: w.cues) }
+        }
+        return backup
+    }
+
+    /// A version's cues on one note (lyrics bus only), as saved in Prime.
+    public func cues(versionId: String, note: Int) throws -> [SavedCue] {
+        try withDB(readonly: true) { db in
+            try midiCues(db, versionId: versionId).compactMap { SavedCue($0, note: note) }
+        }
+    }
+
+    /// Moves saved cues in place, keeping everything else about them (id, channel, velocity).
+    /// `moves` is versionId -> cue id -> new position. Edits only those cues' two fields inside
+    /// SQLite, so every other cue stays byte-for-byte the same. Backs up first, one transaction.
+    @discardableResult
+    public func move(_ moves: [String: [String: (sectionId: String, progress: Double)]],
+                     lyricNote: Int = CueNotes().lyric) throws -> URL {
+        let backup = try modify(label: "pre-shift") { db in
+            for (versionId, positions) in moves {
+                let rows = try query(db, """
+                    SELECT j.key, CAST(json_extract(j.value, '$.id') AS TEXT)
+                    FROM multitrackVersion v, json_each(v.midiCues) j
+                    WHERE v.localId = ? AND json_extract(j.value, '$.bus') = '\(Self.bus)'
+                      AND json_extract(j.value, '$.noteNumber') = \(lyricNote)
+                    """, [versionId])
+                for row in rows {
+                    guard let index = row[0].flatMap(Int.init), let id = row[1], let to = positions[id] else { continue }
+                    try exec(db, """
+                        UPDATE multitrackVersion
+                        SET midiCues = json_set(midiCues, '$[\(index)].multitrackSectionId', ?,
+                                                '$[\(index)].sectionProgress', json(?))
+                        WHERE localId = ? AND json_extract(midiCues, '$[\(index)].id') IS NOT NULL
+                        """, [to.sectionId, String(to.progress), versionId])
+                }
+            }
+        }
+        for versionId in moves.keys {
+            guard let song = try? song(versionId: versionId),
+                  let saved = try? cues(versionId: versionId, note: lyricNote) else { continue }
+            try? saveBaseline(song: song, cues: saved.map { ($0.velocity, $0.sectionId, $0.progress) })
+        }
+        return backup
+    }
+
+    /// Backs up the whole database, then runs `body` in one transaction. Returns the backup.
+    private func modify(label: String, _ body: (OpaquePointer) throws -> Void) throws -> URL {
         let isLive = url.resolvingSymlinksInPath().path.hasPrefix(Self.containerDocs.resolvingSymlinksInPath().path)
         if isLive && Self.primeIsRunning { throw PrimeError.primeRunning }
         try checkSchema()
-        let backup = try withDB(readonly: false) { db in
+        return try withDB(readonly: false) { db in
             try FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
             let stamp = DateFormatter.backupStamp.string(from: Date())
-            let backup = backupDir.appendingPathComponent("\(url.lastPathComponent)-\(stamp)-pre-record.bak")
+            var backup = backupDir.appendingPathComponent("\(url.lastPathComponent)-\(stamp)-\(label).bak")
+            var n = 2
+            while FileManager.default.fileExists(atPath: backup.path) {
+                backup = backupDir.appendingPathComponent("\(url.lastPathComponent)-\(stamp)-\(label)-\(n).bak")
+                n += 1
+            }
             try exec(db, "VACUUM INTO ?", [backup.path])
-
             try exec(db, "BEGIN IMMEDIATE")
             do {
-                var nextId = 100_000 + (Int(try query(db, """
-                    SELECT max(CAST(json_extract(j.value, '$.id') AS INTEGER))
-                    FROM multitrackVersion v, json_each(v.midiCues) j
-                    """).first?[0] ?? "") ?? 0)
-                for w in writes {
-                    let current = try query(db, "SELECT midiCues FROM multitrackVersion WHERE localId = ?", [w.versionId])
-                    guard let row = current.first else {
-                        throw PrimeError.notFound("A song was removed from Prime before saving. Nothing was saved.")
-                    }
-                    var kept = Self.jsonArray(row[0]).filter {
-                        !(($0["noteNumber"] as? Int) == w.note && ($0["bus"] as? String) == Self.bus)
-                    }
-                    for cue in w.cues {
-                        kept.append([
-                            "bus": Self.bus, "channel": w.channel, "id": String(nextId),
-                            "isMigratedToBus": true, "messageType": ["noteOn": [String: Any]()],
-                            "multitrackSectionId": cue.sectionId, "noteNumber": w.note,
-                            "noteVelocity": cue.velocity, "sectionProgress": cue.progress,
-                        ])
-                        nextId += 1
-                    }
-                    let data = try JSONSerialization.data(withJSONObject: kept, options: [.sortedKeys, .withoutEscapingSlashes])
-                    try exec(db, "UPDATE multitrackVersion SET midiCues = ? WHERE localId = ?",
-                             [String(decoding: data, as: UTF8.self), w.versionId])
-                }
+                try body(db)
                 try exec(db, "COMMIT")
             } catch {
                 try? exec(db, "ROLLBACK")
@@ -270,10 +339,19 @@ public final class PrimeDB {
             }
             return backup
         }
-        for w in writes where w.note == lyricNote {
-            if let song = try? song(versionId: w.versionId) { try? saveBaseline(song: song, cues: w.cues) }
+    }
+
+    private func midiCues(_ db: OpaquePointer, versionId: String) throws -> [[String: Any]] {
+        guard let row = try query(db, "SELECT midiCues FROM multitrackVersion WHERE localId = ?", [versionId]).first else {
+            throw PrimeError.notFound("A song was removed from Prime before saving. Nothing was saved.")
         }
-        return backup
+        return Self.jsonArray(row[0])
+    }
+
+    private func setMidiCues(_ db: OpaquePointer, versionId: String, _ cues: [[String: Any]]) throws {
+        let data = try JSONSerialization.data(withJSONObject: cues, options: [.sortedKeys, .withoutEscapingSlashes])
+        try exec(db, "UPDATE multitrackVersion SET midiCues = ? WHERE localId = ?",
+                 [String(decoding: data, as: UTF8.self), versionId])
     }
 
     /// Same sidecar prime.py writes, so the skill's `learn` command can diff later hand edits.

@@ -59,6 +59,10 @@ final class AppModel {
     var firstSlideAt: Double?
     /// Recorded lyric cues waiting to be saved, by Prime version id.
     var pendingLyrics: [String: CuePlan] = [:]
+    var showShift = false
+    #if DEBUG
+    var demoShiftPreview: ShiftPreview?
+    #endif
 
     private let defaults = UserDefaults.standard
     private var db: PrimeDB?
@@ -142,7 +146,7 @@ final class AppModel {
         }
     }
 
-    private func loadSongs() {
+    fileprivate func loadSongs() {
         guard let db, let setlistId else { songs = []; return }
         do {
             let selected = versionId
@@ -288,16 +292,88 @@ final class AppModel {
 
     func save() {
         guard changeCount > 0 else { return }
+        whenPrimeIsClosed { $0.write() }
+    }
+
+    /// Prime overwrites its database when it quits, so writes wait until it's closed.
+    private func whenPrimeIsClosed(_ action: @escaping (AppModel) -> Void) {
         if PrimeDB.primeIsRunning {
             saveState = .waitingForPrime
             waitTask = Task {
                 while PrimeDB.primeIsRunning && !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(500))
                 }
-                if !Task.isCancelled { write() }
+                if !Task.isCancelled { action(self) }
             }
         } else {
-            write()
+            action(self)
+        }
+    }
+
+    // MARK: Shifting saved lyric cues
+
+    struct ShiftPreview {
+        var moves: [String: [String: (sectionId: String, progress: Double)]] = [:]
+        var songs = 0
+        var cues = 0
+        var pinned = 0
+        var skipped: [String] = []  // "Song name: reason"
+    }
+
+    /// What shifting the saved lyric cues by `seconds` (< 0 is earlier) would do, read fresh
+    /// from Prime. Songs with a recording that isn't saved yet are left out: saving it replaces
+    /// their cues anyway.
+    func shiftPreview(seconds: Double, onlyVersionId: String? = nil) -> ShiftPreview {
+        var preview = ShiftPreview()
+        #if DEBUG
+        if let demo = demoShiftPreview { return demo }
+        #endif
+        guard let db else { return preview }
+        for entry in songs where entry.isMusic && entry.lyricCues > 0 && (onlyVersionId == nil || entry.id == onlyVersionId) {
+            if pendingLyrics[entry.id] != nil {
+                preview.skipped.append("\(entry.name): recorded but not saved yet")
+                continue
+            }
+            do {
+                let song = try db.song(versionId: entry.id)
+                let result = CueShift.shift(try db.cues(versionId: entry.id, note: notes.lyric), in: song, by: seconds)
+                if let reason = result.skipped {
+                    preview.skipped.append("\(entry.name): \(reason)")
+                    continue
+                }
+                guard !result.moves.isEmpty else { continue }
+                preview.moves[entry.id] = result.moves
+                preview.songs += 1
+                preview.cues += result.moves.count
+                preview.pinned += result.pinned
+            } catch {
+                preview.skipped.append("\(entry.name): \(error.localizedDescription)")
+            }
+        }
+        return preview
+    }
+
+    /// Moves every saved lyric cue in this week's songs (or one song) by `seconds`; playlist
+    /// item cues stay put. `adjustLead` also moves new recordings by the same amount.
+    func shiftLyrics(seconds: Double, onlyVersionId: String? = nil, adjustLead: Bool) {
+        whenPrimeIsClosed { model in
+            guard let db = model.db else { model.saveState = .idle; return }
+            let preview = model.shiftPreview(seconds: seconds, onlyVersionId: onlyVersionId)
+            do {
+                if !preview.moves.isEmpty { try db.move(preview.moves, lyricNote: model.notes.lyric) }
+                if adjustLead { model.leadSeconds = min(max(model.leadSeconds - seconds, 0), 3) }
+                model.loadSongs()
+                let amount = String(format: "%g second%@ %@", abs(seconds), abs(seconds) == 1 ? "" : "s",
+                                    seconds < 0 ? "earlier" : "later")
+                model.saveState = .saved(preview.moves.isEmpty
+                    ? "No lyric cues needed moving."
+                    : "Moved \(preview.cues) lyric cue\(preview.cues == 1 ? "" : "s") in \(preview.songs) "
+                      + "song\(preview.songs == 1 ? "" : "s") \(amount). Open Prime, check them, then save "
+                      + "them to the cloud.")
+            } catch {
+                model.error = error.localizedDescription
+                model.saveState = .idle
+            }
         }
     }
 

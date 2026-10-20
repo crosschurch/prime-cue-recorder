@@ -2,7 +2,7 @@
 import AppKit
 import CueCore
 
-/// PCR_DEMO=ready|recording|review|waiting|saved swift run (add -clock for a song without sections) — sample data for checking the UI
+/// PCR_DEMO=ready|recording|review|waiting|saved|shift swift run (add -clock for a song without sections) — sample data for checking the UI
 /// without ProPresenter or a Prime library.
 extension AppModel {
     func loadDemo(_ demo: String) {
@@ -71,6 +71,11 @@ extension AppModel {
         case "recording": self.phase = .recording
         case "review": self.phase = .review
         case "waiting": saveState = .waitingForPrime
+        case "shift":
+            clicks = []
+            demoShiftPreview = ShiftPreview(songs: 3, cues: 118, pinned: 2,
+                                            skipped: ["Goodness of God: recorded but not saved yet"])
+            showShift = true
         case "saved":
             saveState = .saved("Saved 2 playlist cues and lyrics for 1 song. Open Prime, check the songs, "
                                + "then save them to the cloud.")

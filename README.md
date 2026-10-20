@@ -13,6 +13,8 @@ Mac app that sets up ProPresenter MIDI cues in Loop Community Prime each week: t
 
 **Songs without sections** (uploaded songs, songs with tempo changes) are timed by the clock instead. Prime stores their cues as a fraction of the whole song, so the app reads the song's length from its downloaded stems, and after recording asks where the first slide lands in the song (it starts from the recorded time, which is right when Record and Play were pressed together). The rest follow the clicks.
 
+**Shift Lyric Cues** (toolbar, ⇆) moves every saved lyric cue in this week's setlist, or one song, earlier or later by a set amount (0.5 s earlier by default), for when slides keep changing a little late. Playlist item cues stay put, and it can also move new recordings by the same amount. A cue pushed past the start of its section moves into the section before it when both play once; in a section that repeats it stops at the edge instead, and the sheet says how many did. Shifting back the other way undoes it.
+
 **Settings.** Note numbers (19 lyrics, 18 playlist item), MIDI channel, the early-fire time, and whether playlist headers count when numbering items are all adjustable.
 
 **Safety.** Saving backs up the whole Prime database to `~/Documents/PrimeBackups` first and only replaces those two notes on Prime's lyrics bus. Lights and other cues are kept, and songs with more than one playlist cue (medleys) are left alone. Lyric saves also write the same baseline file as the `prime-midi-cues` skill, so `prime.py learn` still works.
@@ -39,6 +41,6 @@ Signing and notarization come from `~/.config/jcss/release.env` on Josh's Mac. P
 
 The feed is signed with the update key at `~/.config/prime-cue-recorder/sparkle-ed25519.key` (an ed25519 seed, base64; its public half is `SUPublicEDKey` in `build-app.sh`). Keep a copy somewhere safe: without it, installed copies can't be updated, and a new key needs everyone to reinstall by hand. Only release builds update themselves; `UPDATE_FEED=<url>` points a local build at a feed to test updating.
 
-`PCR_DEMO=review swift run` (also `ready`, `recording`, `waiting`, `saved`; add `-clock` for a song without sections) opens a screen with sample data, without ProPresenter or Prime.
+`PCR_DEMO=review swift run` (also `ready`, `recording`, `waiting`, `saved`, `shift`; add `-clock` for a song without sections) opens a screen with sample data, without ProPresenter or Prime.
 
 `PRIME_TEST_DB=/path/to/copy.sqlite swift test` also tests saving against a copy of a real Prime database.

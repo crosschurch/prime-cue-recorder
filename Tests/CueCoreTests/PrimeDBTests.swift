@@ -48,4 +48,62 @@ final class PrimeDBTests: XCTestCase {
         }
         if checked == 0 { throw XCTSkip("No downloaded songs without sections") }
     }
+
+    /// Shifting every lyric cue earlier and back again leaves the songs as they were, and
+    /// never touches other notes or buses.
+    func testShiftMovesOnlyLyricCuesAndUndoes() throws {
+        guard let path = ProcessInfo.processInfo.environment["PRIME_TEST_DB"] else {
+            throw XCTSkip("Set PRIME_TEST_DB to a copy of a Prime database")
+        }
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let db = PrimeDB(url: URL(fileURLWithPath: path), backupDir: scratch)
+        var versions: [String] = []
+        for list in try db.setlists() {
+            versions += try db.songs(setlistId: list.id).filter { $0.lyricCues > 0 }.map(\.id)
+        }
+        versions = Array(Set(versions)).sorted()
+        XCTAssertFalse(versions.isEmpty)
+
+        func shift(_ seconds: Double) throws -> (moved: Int, pinned: Int) {
+            var moves: [String: [String: (sectionId: String, progress: Double)]] = [:]
+            var pinned = 0
+            for id in versions {
+                let r = CueShift.shift(try db.cues(versionId: id, note: 19), in: try db.song(versionId: id), by: seconds)
+                if !r.moves.isEmpty { moves[id] = r.moves }
+                pinned += r.pinned
+            }
+            try db.move(moves)
+            return (moves.values.map(\.count).reduce(0, +), pinned)
+        }
+        let before = try versions.map { try db.cues(versionId: $0, note: 19) }
+        func otherNotes() throws -> [String] {
+            try versions.map { id in "\(id): " + (try [18, 1, 35].map { try db.cues(versionId: id, note: $0) }.description) }
+        }
+        let others = try otherNotes()
+        let earlier = try shift(-0.5)
+        print("moved \(earlier.moved) cues in \(versions.count) songs, \(earlier.pinned) pinned")
+        XCTAssertGreaterThan(earlier.moved, 0)
+        let during = try versions.map { try db.cues(versionId: $0, note: 19) }
+        XCTAssertEqual(during.map(\.count), before.map(\.count))
+        XCTAssertEqual(during.map { $0.map(\.velocity) }, before.map { $0.map(\.velocity) })
+        for (a, b) in zip(try otherNotes(), others) where a != b { XCTFail("changed:\n  \(b)\n  \(a)") }
+        let later = try shift(0.5)
+        // Compare where each cue sits in the song, in beats: the end of one section and the start
+        // of the next are the same moment.
+        var moved: [String] = []
+        for (i, id) in versions.enumerated() {
+            let song = try db.song(versionId: id)
+            let byId = Dictionary(song.sections.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            func beat(_ c: SavedCue) -> Double {
+                guard let s = byId[c.sectionId] else { return c.progress * 100_000 }
+                return s.startBeat + c.progress * s.beats
+            }
+            for (b, a) in zip(before[i], try db.cues(versionId: id, note: 19)) where abs(beat(b) - beat(a)) > 0.01 {
+                moved.append("\(song.name) slide \(b.velocity): \(beat(b)) -> \(beat(a))")
+            }
+        }
+        print("\(moved.count) cues not back where they started; \(earlier.pinned + later.pinned) were pinned")
+        moved.forEach { print("  " + $0) }
+        XCTAssertLessThanOrEqual(moved.count, earlier.pinned + later.pinned)
+    }
 }

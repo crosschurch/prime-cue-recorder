@@ -126,3 +126,61 @@ final class ClockTimingTests: XCTestCase {
         XCTAssertEqual(plan.warnings.count, 1)
     }
 }
+
+final class CueShiftTests: XCTestCase {
+    // 120 BPM: half a second is one beat.
+    let intro = PrimeSection(id: "i", type: "intro", startBeat: 0, endBeat: 8)
+    let verse = PrimeSection(id: "v", type: "verse_1", startBeat: 8, endBeat: 40)
+    let chorus = PrimeSection(id: "c", type: "chorus", startBeat: 40, endBeat: 72)
+
+    func song(_ arrangement: [PrimeSection]) -> PrimeSong {
+        PrimeSong(versionId: "x", name: "x", tempo: 120, sections: [intro, verse, chorus], arrangement: arrangement)
+    }
+
+    func testMovesWithinASection() {
+        let cue = SavedCue(id: "1", velocity: 2, sectionId: "v", progress: 0.5)  // beat 16 of 32
+        let r = CueShift.shift([cue], in: song([intro, verse, chorus]), by: -0.5)
+        XCTAssertEqual(r.moves["1"]?.sectionId, "v")
+        XCTAssertEqual(r.moves["1"]?.progress, 0.46875)  // beat 15
+        XCTAssertEqual(r.pinned, 0)
+    }
+
+    func testCrossesIntoThePreviousSectionWhenEachPlaysOnce() {
+        let cue = SavedCue(id: "1", velocity: 2, sectionId: "v", progress: 0)
+        let r = CueShift.shift([cue], in: song([intro, verse, chorus]), by: -0.5)
+        XCTAssertEqual(r.moves["1"]?.sectionId, "i")
+        XCTAssertEqual(r.moves["1"]?.progress, 0.875)  // beat 7 of 8
+    }
+
+    func testPinsAtTheSectionStartWhenTheSectionRepeats() {
+        let cue = SavedCue(id: "1", velocity: 5, sectionId: "c", progress: 0)
+        let r = CueShift.shift([cue], in: song([intro, verse, chorus, verse, chorus]), by: -0.5)
+        XCTAssertNil(r.moves["1"])  // already at the start, nothing to change
+        XCTAssertEqual(r.pinned, 1)
+    }
+
+    func testLaterUndoesEarlier() {
+        let cues = [SavedCue(id: "1", velocity: 2, sectionId: "v", progress: 0),
+                    SavedCue(id: "2", velocity: 3, sectionId: "c", progress: 0.25)]
+        let s = song([intro, verse, chorus])
+        let earlier = CueShift.shift(cues, in: s, by: -0.5)
+        let moved = cues.map { c in earlier.moves[c.id].map {
+            SavedCue(id: c.id, velocity: c.velocity, sectionId: $0.sectionId, progress: $0.progress) } ?? c }
+        let back = CueShift.shift(moved, in: s, by: 0.5)
+        XCTAssertEqual(back.moves["1"]?.sectionId, "v")
+        XCTAssertEqual(back.moves["1"]?.progress, 0)
+        XCTAssertEqual(back.moves["2"]?.progress, 0.25)
+    }
+
+    func testSongsWithoutSectionsMoveByTheClock() {
+        let s = PrimeSong(versionId: "x", name: "x", tempo: 70, sections: [], arrangement: [], duration: 200)
+        let cues = [SavedCue(id: "1", velocity: 2, sectionId: "", progress: 0.05),     // 10 s
+                    SavedCue(id: "2", velocity: 3, sectionId: "", progress: 0.001)]    // 0.2 s
+        let r = CueShift.shift(cues, in: s, by: -0.5)
+        XCTAssertEqual(r.moves["1"]?.progress, 0.0475)  // 9.5 s
+        XCTAssertEqual(r.moves["2"]?.progress, 0)
+        XCTAssertEqual(r.pinned, 1)
+        let unknown = PrimeSong(versionId: "x", name: "x", tempo: 70, sections: [], arrangement: [])
+        XCTAssertNotNil(CueShift.shift(cues, in: unknown, by: -0.5).skipped)
+    }
+}

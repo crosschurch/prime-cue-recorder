@@ -52,6 +52,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSetup) {
             SettingsView(model: model, isFirstRun: true)
         }
+        .sheet(isPresented: $model.showShift) {
+            ShiftSheet(model: model)
+        }
         .onAppear { if model.ppPort.isEmpty && model.connection == .unknown { showSetup = true } }
         .animation(.smooth, value: model.phase)
         .animation(.smooth, value: model.error)
@@ -74,6 +77,9 @@ struct ContentView: View {
                 ForEach(model.playlists) { Text($0.name).tag(Optional($0.id)) }
             }
             .help("ProPresenter playlist")
+            Button("Shift Lyric Cues", systemImage: "arrow.left.arrow.right") { model.showShift = true }
+                .help("Move every saved lyric cue earlier or later")
+                .disabled(model.phase == .recording || model.saveState == .waitingForPrime || model.songs.isEmpty)
             Button("Reload", systemImage: "arrow.clockwise") {
                 model.loadLibrary()
                 Task { await model.connect() }
@@ -652,6 +658,95 @@ private struct ConnectionBadge: View {
         .labelStyle(.titleAndIcon)
         .padding(.horizontal, 10)
         .help(help)
+    }
+}
+
+/// Moves every saved lyric cue earlier or later at once, e.g. when slides keep changing a
+/// little late. Playlist item cues stay where they are.
+private struct ShiftSheet: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var amount = 0.5
+    @State private var earlier = true
+    @State private var onlyThisSong = false
+    @State private var adjustLead = true
+    @State private var preview = AppModel.ShiftPreview()
+
+    private var seconds: Double { earlier ? -amount : amount }
+    private var direction: String { earlier ? "earlier" : "later" }
+    private var setlistName: String { model.setlists.first { $0.id == model.setlistId }?.name ?? "this setlist" }
+    private var songName: String? { model.songs.first { $0.id == model.versionId }?.name }
+    private var newLead: Double { min(max(model.leadSeconds - seconds, 0), 3) }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Move cues", selection: $earlier) {
+                    Text("Earlier").tag(true)
+                    Text("Later").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Stepper(value: $amount, in: 0.1...5, step: 0.1) {
+                    LabeledContent("By", value: String(format: "%.1f seconds", amount)).monospacedDigit()
+                }
+            } header: {
+                Text("Shift Lyric Cues")
+            } footer: {
+                Text("Moves the lyric slide cues (note \(model.notes.lyric)) already saved in Prime. "
+                     + "Playlist item cues (note \(model.notes.playlist)) stay where they are.")
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Picker("Songs", selection: $onlyThisSong) {
+                    Text("Every song in “\(setlistName)”").tag(false)
+                    if let songName { Text("Only “\(songName)”").tag(true) }
+                }
+                .pickerStyle(.radioGroup)
+                Toggle(String(format: "Also fire new recordings %.1fs %@ (%.1fs → %.1fs early)",
+                              amount, direction, model.leadSeconds, newLead), isOn: $adjustLead)
+            }
+            Section {
+                Label(summary, systemImage: preview.cues > 0 ? "arrow.left.arrow.right.circle.fill" : "info.circle")
+                    .foregroundStyle(preview.cues > 0 ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                if preview.pinned > 0 {
+                    Label("\(preview.pinned) cue\(preview.pinned == 1 ? " is" : "s are") at the edge of a section that "
+                          + "plays more than once, so \(preview.pinned == 1 ? "it stops" : "they stop") at that edge.",
+                          systemImage: "exclamationmark.triangle").foregroundStyle(.secondary)
+                }
+                ForEach(preview.skipped, id: \.self) { line in
+                    Label("Skipped \(line)", systemImage: "minus.circle").foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text("Prime is backed up first, and shifting back the other way undoes it.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 500)
+        .fixedSize(horizontal: false, vertical: true)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(PrimeDB.primeIsRunning ? "Quit Prime and Shift" : "Shift Cues") {
+                    model.shiftLyrics(seconds: seconds, onlyVersionId: onlyThisSong ? model.versionId : nil,
+                                      adjustLead: adjustLead)
+                    if PrimeDB.primeIsRunning { model.quitPrime() }
+                    dismiss()
+                }
+                .disabled(preview.cues == 0 && !adjustLead)
+            }
+        }
+        .task(id: "\(seconds) \(onlyThisSong)") {
+            preview = model.shiftPreview(seconds: seconds, onlyVersionId: onlyThisSong ? model.versionId : nil)
+        }
+    }
+
+    private var summary: String {
+        guard preview.cues > 0 else { return "No saved lyric cues to move." }
+        return String(format: "Moves %d lyric cue%@ in %d song%@ %.1f seconds %@.", preview.cues,
+                      preview.cues == 1 ? "" : "s", preview.songs, preview.songs == 1 ? "" : "s", amount, direction)
     }
 }
 
