@@ -17,7 +17,7 @@ Mac app that sets up ProPresenter MIDI cues in Loop Community Prime each week: t
 
 **Safety.** Saving backs up the whole Prime database to `~/Documents/PrimeBackups` first and only replaces those two notes on Prime's lyrics bus. Lights and other cues are kept, and songs with more than one playlist cue (medleys) are left alone. Lyric saves also write the same baseline file as the `prime-midi-cues` skill, so `prime.py learn` still works.
 
-The landing page (prime.joshcirre.com) is in `site/`, served by a Cloudflare Worker with static assets: `npx wrangler deploy`.
+The landing page (prime.joshcirre.com) is in `site/`, served by a Cloudflare Worker with static assets: `npx wrangler deploy`. The social preview image `site/og.png` is rendered from `art/og.html`: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --force-device-scale-factor=1 --window-size=1200,630 --screenshot="$PWD/site/og.png" "file://$PWD/art/og.html"`.
 
 ## Build
 

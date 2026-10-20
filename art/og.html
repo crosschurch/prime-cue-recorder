@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- Source for site/og.png (1200x630). Render: see README › Landing page. -->
+<html><head><meta charset="utf-8"><style>
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+    color: #fff;
+    background:
+      radial-gradient(ellipse 60% 70% at 30% 0%, rgba(140, 150, 255, 0.5), transparent 70%),
+      linear-gradient(160deg, #4b55d6 0%, #2a2c8a 50%, #14123f 100%);
+    position: relative;
+    -webkit-font-smoothing: antialiased;
+  }
+  .copy { position: absolute; left: 80px; top: 0; bottom: 0; width: 470px; display: flex; flex-direction: column; justify-content: center; }
+  .icon { width: 132px; height: 132px; margin: 0 0 30px -10px; filter: drop-shadow(0 20px 34px rgba(5, 4, 30, 0.6)); }
+  h1 { font-size: 64px; line-height: 1.02; letter-spacing: -0.025em; font-weight: 700; margin: 0 0 20px; }
+  p { font-size: 26px; line-height: 1.35; color: rgba(255, 255, 255, 0.82); margin: 0 0 30px; }
+  .pill { display: inline-flex; align-self: flex-start; padding: 10px 22px; border-radius: 999px; font-size: 20px; font-weight: 600;
+          background: linear-gradient(180deg, #ffb14a, #ff6a2b); box-shadow: 0 12px 26px -10px rgba(255, 106, 43, 0.8); }
+  .shot { position: absolute; left: 600px; top: 92px; width: 760px; border-radius: 14px; overflow: hidden;
+          box-shadow: 0 30px 80px -10px rgba(5, 4, 30, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.15);
+          -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent 98%); }
+  .shot img { display: block; width: 100%; }
+</style></head><body>
+  <div class="copy">
+    <img class="icon" src="../site/icon.png">
+    <h1>Prime Cue<br>Recorder</h1>
+    <p>Click through your lyric slides once. Prime runs ProPresenter after that.</p>
+    <span class="pill">Free for Mac</span>
+  </div>
+  <div class="shot"><img src="../site/ready.png"></div>
+</body></html>
