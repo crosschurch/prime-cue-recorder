@@ -166,7 +166,7 @@ public final class PrimeDB {
         try withDB(readonly: true) { db in
             let needed = [
                 "multitrack": ["localId", "name", "tempo", "sections"],
-                "multitrackVersion": ["localId", "name", "multitrackId", "midiCues", "arrangedSections"],
+                "multitrackVersion": ["localId", "name", "multitrackId", "midiCues"],
                 "setlist": ["localId", "name", "serviceDate", "activeMultitrackVersionId", "updatedAt"],
                 "setlistMultitrackVersion": ["localId", "setlistId", "editableVersionId", "position"],
             ]
@@ -176,7 +176,18 @@ public final class PrimeDB {
                     throw PrimeError.schemaChanged("\(table).\(missing) is missing")
                 }
             }
+            _ = try arrangementColumn(db)
         }
+    }
+
+    /// Newer Prime keeps a version's arrangement in `arrangedSections` ([{"sectionId": …}]); older
+    /// libraries, still in use on some Macs, in `arrangedSectionIds` (["…"]). Only ever read.
+    private func arrangementColumn(_ db: OpaquePointer) throws -> String {
+        let have = Set(try query(db, "SELECT name FROM pragma_table_info('multitrackVersion')").compactMap { $0[0] })
+        guard let column = ["arrangedSections", "arrangedSectionIds"].first(where: have.contains) else {
+            throw PrimeError.schemaChanged("multitrackVersion.arrangedSections is missing")
+        }
+        return column
     }
 
     public func setlists() throws -> [Setlist] {
@@ -215,7 +226,7 @@ public final class PrimeDB {
     public func song(versionId: String) throws -> PrimeSong {
         try withDB(readonly: true) { db in
             guard let row = try query(db, """
-                SELECT m.name, m.tempo, m.sections, v.arrangedSections, m.localId, m.duration
+                SELECT m.name, m.tempo, m.sections, v.\(try arrangementColumn(db)), m.localId, m.duration
                 FROM multitrackVersion v JOIN multitrack m ON m.localId = v.multitrackId
                 WHERE v.localId = ?
                 """, [versionId]).first else {
@@ -223,7 +234,7 @@ public final class PrimeDB {
             }
             let sections = Self.parseSections(row[2]).sorted { $0.startBeat < $1.startBeat }
             let byId = Dictionary(sections.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            let arranged = Self.jsonArray(row[3]).compactMap { Self.string($0["sectionId"]).flatMap { byId[$0] } }
+            let arranged = Self.arrangedIds(row[3]).compactMap { byId[$0] }
             let song = PrimeSong(versionId: versionId, name: row[0] ?? "", tempo: Double(row[1] ?? "") ?? 0,
                                  sections: sections, arrangement: arranged.isEmpty ? sections : arranged)
             guard !song.hasSections else { return song }
@@ -466,6 +477,13 @@ public final class PrimeDB {
         guard let data = text?.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         return array
+    }
+
+    /// Section ids in play order, from either arrangement column.
+    static func arrangedIds(_ text: String?) -> [String] {
+        guard let data = text?.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return [] }
+        return array.compactMap { string(($0 as? [String: Any])?["sectionId"] ?? $0) }
     }
 
     static func string(_ value: Any?) -> String? {

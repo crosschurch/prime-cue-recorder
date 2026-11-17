@@ -28,6 +28,42 @@ final class PrimeDBTests: XCTestCase {
         XCTAssertEqual(after.playlistCues, [7])
     }
 
+    /// Older libraries keep the arrangement as `arrangedSectionIds`, a plain list of section ids.
+    /// They read the same as the newer `arrangedSections`.
+    func testOlderArrangementColumnReadsTheSame() throws {
+        guard let path = ProcessInfo.processInfo.environment["PRIME_TEST_DB"] else {
+            throw XCTSkip("Set PRIME_TEST_DB to a copy of a Prime database")
+        }
+        let old = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: old)
+        let sql = """
+            ALTER TABLE multitrackVersion RENAME COLUMN arrangedSections TO arrangedSectionIds;
+            UPDATE multitrackVersion SET arrangedSectionIds =
+              (SELECT json_group_array(json_extract(j.value, '$.sectionId')) FROM json_each(arrangedSectionIds) j)
+            WHERE json_valid(arrangedSectionIds);
+            """
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        shell.arguments = [old.path, sql]
+        try shell.run()
+        shell.waitUntilExit()
+        XCTAssertEqual(shell.terminationStatus, 0)
+
+        let new = PrimeDB(url: URL(fileURLWithPath: path)), older = PrimeDB(url: old)
+        try older.checkSchema()
+        let (_, entry) = try XCTUnwrap(try new.setlists().lazy.compactMap { list in
+            try? new.songs(setlistId: list.id).first { $0.hasSections }.map { (list, $0) }
+        }.first)
+        XCTAssertEqual(try older.song(versionId: entry.id).arrangement.map(\.id),
+                       try new.song(versionId: entry.id).arrangement.map(\.id))
+    }
+
+    func testArrangedIdsReadsBothFormats() {
+        XCTAssertEqual(PrimeDB.arrangedIds(#"[{"sectionId":"4","trimEnd":0},{"sectionId":"5"}]"#), ["4", "5"])
+        XCTAssertEqual(PrimeDB.arrangedIds(#"["4","5"]"#), ["4", "5"])
+        XCTAssertEqual(PrimeDB.arrangedIds(nil), [])
+    }
+
     /// Songs without sections get their length from their downloaded stems.
     func testSectionlessSongsHaveADuration() throws {
         guard let path = ProcessInfo.processInfo.environment["PRIME_TEST_DB"] else {
