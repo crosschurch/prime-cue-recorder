@@ -36,6 +36,11 @@ git push origin HEAD "$TAG"
 
 if [ -f "$HOME/.config/jcss/release.env" ]; then
     set -a; . "$HOME/.config/jcss/release.env"; set +a
+    # The signing keychain locks itself after a while; codesign then fails with errSecInternalComponent.
+    if [ -n "${JCSS_KEYCHAIN:-}" ] && [ -n "${JCSS_KEYCHAIN_PASSWORD:-}" ]; then
+        security unlock-keychain -p "$JCSS_KEYCHAIN_PASSWORD" "$JCSS_KEYCHAIN" >/dev/null 2>&1 \
+            || echo "Couldn't unlock the signing keychain; codesign may ask for its password"
+    fi
     unset JCSS_KEYCHAIN_PASSWORD
     SIGN_ID="${SIGN_ID:-${JCSS_SIGN_IDENTITY:-}}"
 fi
